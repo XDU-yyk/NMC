@@ -1,6 +1,6 @@
 /**
  * @file    server.h
- * @brief   WebSocket 嵌入式 Web 服务器 (gilmaimon/ArduinoWebsockets)
+ * @brief   WebSocket 嵌入式 Web 服务器 v2.0
  */
 
 #ifndef SERVER_H
@@ -9,7 +9,9 @@
 #include "config.h"
 #include "fusion/sensor_fusion.h"
 #include "follow/follow.h"
-#include "control/motor.h"
+#include "control/mission.h"
+#include "sensors/gps.h"
+#include "sensors/tof.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>

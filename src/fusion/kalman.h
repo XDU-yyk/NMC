@@ -1,20 +1,11 @@
 /**
  * @file    kalman.h
- * @brief   扩展卡尔曼滤波器 (EKF) — 6 状态
+ * @brief   9状态扩展卡尔曼滤波器 (EKF v2)
  * 
- * 状态向量 X = [x, y, z, vx, vy, vz]^T
- * - 位置 (x, y, z): 世界坐标系 (mm)
- * - 速度 (vx, vy, vz): 世界坐标系 (mm/s)
+ * 状态向量: X = [x, y, z, vx, vy, vz, ax_bias, ay_bias, az_bias]
+ * 观测源: GPS(xyz) + UWB(xyz) + ToF(z) + 飞控气压计(z)
  * 
- * 观测模型:
- * - UWB: 直接观测 x, y, z (测量噪声较大)
- * - 气压计: 直接观测 z (测量噪声小)
- * - IMU: 提供加速度作为控制输入 (u = [ax, ay, az])
- * 
- * 利用 ESP32-S3 AI 向量指令集:
- * - 矩阵乘法使用 ESP-DSP 的 dsps_mul_f32()
- * - 所有矩阵 16 字节对齐 → SIMD 加载/存储
- * - 协方差更新利用对称性减少运算量
+ * 所有单位: 国际单位制 (m, m/s, m/s²)
  */
 
 #ifndef KALMAN_H
@@ -23,91 +14,74 @@
 #include "config.h"
 #include <Arduino.h>
 
-/**
- * @brief 6 状态 EKF
- */
-class KalmanFilter6D {
+#define KF_N 9   // 状态向量维度
+
+class KalmanFilter {
 public:
-    /**
-     * @brief 初始化滤波器
-     * @param dt 预测步长 (秒)
-     */
-    void init(float dt);
-    
-    /**
-     * @brief 预测步: 基于 IMU 加速度推算
-     * @param ax, ay, az 加速度 (mm/s²) — 已转换到世界系
-     */
-    void predict(float ax, float ay, float az);
-    
-    /**
-     * @brief UWB 观测更新: 三维位置
-     * @param x, y, z  测量值 (mm)
-     * @param confidence 置信度 0–1, 用于动态调整 R
-     */
-    void updateUWB(float x, float y, float z, float confidence);
-    
-    /**
-     * @brief 气压计观测更新: 仅高度
-     * @param z 测量高度 (mm)
-     */
+    /* 初始化滤波器 (设置初始位置和初始协方差) */
+    void begin(float initX, float initY, float initZ);
+
+    /* 预测步 (传入 dt 秒, 加速度 [ax, ay, az] 世界坐标系 m/s²) */
+    void predict(float dt, float ax, float ay, float az);
+
+    /* ── 更新步 (分传感器类型) ── */
+
+    /* GPS 绝对位置更新 (xyz, 噪声根据 HDOP 放大) */
+    void updateGPS(float x, float y, float z, float hdopScale);
+
+    /* UWB 相对位置更新 */
+    void updateUWB(float x, float y, float z);
+
+    /* ToF 激光高度更新 (z 轴, 低噪声) */
+    void updateToF(float z);
+
+    /* 飞控气压计高度更新 (z 轴, 中噪声) */
     void updateBaro(float z);
-    
-    /**
-     * @brief 获取当前状态估计
-     */
-    void getState(float& x, float& y, float& z,
-                  float& vx, float& vy, float& vz);
-    
-    /**
-     * @brief 获取协方差矩阵对角线 (不确定度)
-     */
-    void getUncertainty(float& ux, float& uy, float& uz);
-    
-    /**
-     * @brief 重置状态
-     */
-    void reset();
-    
+
+    /* ── 状态获取 ── */
+
+    float getX()     const { return m_X[0]; }
+    float getY()     const { return m_X[1]; }
+    float getZ()     const { return m_X[2]; }
+    float getVX()    const { return m_X[3]; }
+    float getVY()    const { return m_X[4]; }
+    float getVZ()    const { return m_X[5]; }
+    float getBiasX() const { return m_X[6]; }
+    float getBiasY() const { return m_X[7]; }
+    float getBiasZ() const { return m_X[8]; }
+
+    /* 位置协方差 (不确定度) */
+    float getUncertaintyX() const { return sqrtf(fmaxf(0, m_P[0*KF_N + 0])); }
+    float getUncertaintyY() const { return sqrtf(fmaxf(0, m_P[1*KF_N + 1])); }
+    float getUncertaintyZ() const { return sqrtf(fmaxf(0, m_P[2*KF_N + 2])); }
+
+    /* 滤波器是否收敛 */
+    bool isConverged() const { return m_converged; }
+
+    /* 重置滤波器 */
+    void reset(float initX, float initY, float initZ);
+
 private:
-    static constexpr uint8_t N = 6;   // 状态维度
-    
-    // 状态向量 ─ 16 字节对齐
-    float m_X[N] __attribute__((aligned(16)));
-    
-    // 协方差矩阵 P (N×N) ─ 16 字节对齐
-    float m_P[N * N] __attribute__((aligned(16)));
-    
-    // 状态转移矩阵 F (N×N)
-    float m_F[N * N] __attribute__((aligned(16)));
-    
-    // 控制矩阵 B (N×3)
-    float m_B[N * 3] __attribute__((aligned(16)));
-    
-    // 过程噪声协方差 Q (N×N)
-    float m_Q[N * N] __attribute__((aligned(16)));
-    
-    // UWB 观测矩阵 H_uwb (3×N) 及噪声 R_uwb (3×3)
-    float m_H_uwb[3 * N] __attribute__((aligned(16)));
-    float m_R_uwb[3 * 3] __attribute__((aligned(16)));
-    
-    // 气压计观测矩阵 H_baro (1×N) 及噪声 R_baro
-    float m_H_baro[N] __attribute__((aligned(16)));
-    float m_R_baro;
-    
-    float m_dt;
-    bool  m_initialized = false;
-    
-    // ───── 矩阵运算辅助 (SIMD 路径) ─────
-    
-    /**
-     * @brief 通用卡尔曼更新: K = P*H' * inv(H*P*H' + R)
-     * 
-     * 使用 ESP-DSP 矩阵求逆 + 乘法。观测维度 m ≤ 3，
-     * 小矩阵直接展开比通用求逆更快。
-     */
-    void kalmanUpdate(const float* H, const float* R,
-                      const float* Z, uint8_t m);
+    float m_X[KF_N];           // 状态向量
+    float m_P[KF_N * KF_N];    // 协方差矩阵
+
+    bool  m_converged = false;
+    uint32_t m_lastPredict = 0;
+
+    /* 矩阵运算辅助函数 */
+    void matMultiply(const float* A, const float* B, float* C, int n);
+    void matTranspose(const float* A, float* AT, int n);
+    void matAdd(const float* A, const float* B, float* C, int n);
+    void matSubtract(const float* A, const float* B, float* C, int n);
+    float matDeterminant(const float* A, int n);
+    bool  matInverse(const float* A, float* Ainv, int n);
+    void matSetIdentity(float* A, int n);
+    void matSetZero(float* A, int n);
+    void matScale(float* A, float s, int n);
+    void matCopy(const float* src, float* dst, int n);
+
+    /* 通用更新函数 (单行观测) */
+    void updateScalar(const float* H, int H_len, float z, float R);
 };
 
 #endif // KALMAN_H

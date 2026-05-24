@@ -1,6 +1,6 @@
 /**
  * @file    server.cpp
- * @brief   WebSocket 嵌入式 Web 服务器实现
+ * @brief   WebSocket Web 服务器 v2.0
  */
 
 #include "web/server.h"
@@ -35,7 +35,7 @@ bool WebServerManager::begin(const char* ssid, const char* password, bool apMode
     });
     m_httpServer.begin();
     
-    m_wsServer.listen(81);
+    m_wsServer.listen(WS_SERVER_PORT);
     
     LOG(LOG_TAG_WEB, "Ready → http://%s.local", DEVICE_MDNS);
     return true;
@@ -43,11 +43,10 @@ bool WebServerManager::begin(const char* ssid, const char* password, bool apMode
 
 bool WebServerManager::setupMDNS() {
     if (!MDNS.begin(DEVICE_MDNS)) return false;
-    MDNS.addService("http", "tcp", 80);
+    MDNS.addService("http", "tcp", WEB_SERVER_PORT);
     return true;
 }
 
-// ── 接受新 WebSocket 客户端 ──
 void WebServerManager::acceptNewClients() {
     m_wsServer.poll();
     while (m_wsServer.available()) {
@@ -56,19 +55,15 @@ void WebServerManager::acceptNewClients() {
         m_clients.push_back(std::move(client));
     }
     
-    // 清理断开的客户端
     auto it = m_clients.begin();
     while (it != m_clients.end()) {
         if (!it->available()) {
             LOG(LOG_TAG_WEB, "WS client removed");
             it = m_clients.erase(it);
-        } else {
-            ++it;
-        }
+        } else { ++it; }
     }
 }
 
-// ── 处理客户端消息 ──
 void WebServerManager::handleClientMessage(WebsocketsClient& client, WebsocketsMessage msg) {
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, msg.data());
@@ -81,20 +76,61 @@ void WebServerManager::handleClientMessage(WebsocketsClient& client, WebsocketsM
     if      (strcmp(cmd, "hover")  == 0) followCtrl.setMode(FollowMode::HOVER);
     else if (strcmp(cmd, "follow") == 0) followCtrl.setMode(FollowMode::FOLLOW);
     else if (strcmp(cmd, "return") == 0) followCtrl.setMode(FollowMode::RETURN_HOME);
-    else if (strcmp(cmd, "stop")   == 0) { motors.emergencyStop(); followCtrl.setMode(FollowMode::IDLE); }
-    else if (strcmp(cmd, "arm")    == 0) { motors.arm(); followCtrl.setMode(FollowMode::HOVER); }
-    else if (strcmp(cmd, "disarm") == 0) { motors.disarm(); followCtrl.setMode(FollowMode::IDLE); }
+    else if (strcmp(cmd, "stop")   == 0) { followCtrl.emergencyStop(); followCtrl.setMode(FollowMode::IDLE); }
+    else if (strcmp(cmd, "arm")    == 0) { if (mission.arm()) followCtrl.setMode(FollowMode::HOVER); }
+    else if (strcmp(cmd, "disarm") == 0) { mission.disarm(); followCtrl.setMode(FollowMode::IDLE); }
     else if (strcmp(cmd, "setDist")   == 0) followCtrl.setTargetDistance(value);
     else if (strcmp(cmd, "setHeight") == 0) followCtrl.setTargetHeight(value);
     
     if (m_cmdCallback) m_cmdCallback(cmd, value);
 }
 
+void WebServerManager::buildTelemetryJson(JsonDocument& doc) {
+    const FusionState& s = fusion.getState();
+    const GPSData& gd = gps.getData();
+    const ToFData& td = tof.getData();
+    const FCState& fc = fcBridge.getState();
+    
+    // 位置
+    doc["posX"] = s.posX; doc["posY"] = s.posY; doc["posZ"] = s.posZ;
+    doc["velX"] = s.velX; doc["velY"] = s.velY; doc["velZ"] = s.velZ;
+    doc["uncX"] = s.uncertaintyX; doc["uncY"] = s.uncertaintyY; doc["uncZ"] = s.uncertaintyZ;
+    doc["converged"] = fusion.isConverged();
+    
+    // 姿态 (来自飞控)
+    doc["roll"] = s.roll; doc["pitch"] = s.pitch; doc["yaw"] = s.yaw;
+    
+    // GPS
+    doc["gpsValid"]  = gd.valid;
+    doc["gpsSats"]   = gd.satellites;
+    doc["gpsLat"]    = gd.lat;
+    doc["gpsLng"]    = gd.lng;
+    doc["gpsAlt"]    = gd.alt;
+    doc["gpsSpeed"]  = gd.speed;
+    doc["gpsHdop"]   = gd.hdop;
+    
+    // ToF
+    doc["tofValid"]  = td.valid;
+    doc["tofDist"]   = td.distance;  // mm
+    
+    // 飞控
+    doc["fcOnline"]  = s.fcOnline;
+    doc["baroAlt"]   = s.altitudeBaro;
+    doc["batV"]      = s.batteryVoltage;
+    doc["batCells"]  = s.batteryCells;
+    doc["armed"]     = mission.isArmed();
+    
+    // 跟随
+    doc["mode"]      = (int)followCtrl.getMode();
+    doc["tgtValid"]  = (millis() - s.timestamp) < SIGNAL_LOST_TIMEOUT;
+    
+    doc["ts"] = millis();
+}
+
 void WebServerManager::loop() {
     m_httpServer.handleClient();
     acceptNewClients();
     
-    // 轮询每个客户端
     for (auto& client : m_clients) {
         client.poll();
         if (client.available()) {
@@ -108,19 +144,7 @@ void WebServerManager::broadcastTelemetry() {
     if (m_clients.empty()) return;
     
     JsonDocument doc;
-    const FusionState& s = fusion.getState();
-    doc["posX"] = s.posX; doc["posY"] = s.posY; doc["posZ"] = s.posZ;
-    doc["unc"] = (s.uncertaintyX + s.uncertaintyY + s.uncertaintyZ) / 3.0f;
-    doc["converged"] = fusion.isConverged();
-    doc["roll"] = s.roll; doc["pitch"] = s.pitch; doc["yaw"] = s.yaw;
-    doc["vz"] = s.vertSpeed;
-    doc["mode"] = (int)followCtrl.getMode();
-    doc["armed"] = motors.isArmed();
-    doc["tgtX"] = s.posX; doc["tgtY"] = s.posY;
-    doc["tgtDist"] = sqrtf(s.posX*s.posX + s.posY*s.posY);
-    doc["tgtValid"] = (millis() - s.timestamp) < SIGNAL_LOST_TIMEOUT;
-    doc["imuOk"] = imu.isCalibrated(); doc["baroOk"] = true; doc["uwbOk"] = uwb.isHealthy();
-    doc["temp"] = 25.0f; doc["press"] = 1013.25f; doc["ts"] = s.timestamp;
+    buildTelemetryJson(doc);
     
     String out; serializeJson(doc, out);
     for (auto& client : m_clients) {

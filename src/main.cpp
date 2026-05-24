@@ -1,18 +1,17 @@
 /**
  * @file    main.cpp
- * @brief   NMC 智能无人机伞 — 主入口
+ * @brief   NMC 智能无人机伞 v2.0 — 主入口
  * 
- * 系统启动流程:
- * 1. 硬件初始化 (GPIO, SPI, I2C, PWM)
- * 2. 传感器驱动初始化 (IMU, 气压计, UWB)
- * 3. 传感器融合引擎启动
- * 4. 电机控制器初始化
- * 5. 跟随控制器初始化
+ * 架构: ESP32-S3 (协处理器) + F4V3S PLUS (飞控) 双处理器
+ * 
+ * 启动流程:
+ * 1. 硬件初始化 (GPIO, SPI, I2C, UART)
+ * 2. 传感器驱动初始化 (GPS, ToF, UWB)
+ * 3. 飞控通信初始化 (MSP 协议)
+ * 4. 传感器融合引擎启动 (9态 EKF)
+ * 5. 任务规划器 + 跟随控制器初始化
  * 6. WiFi + Web 服务器启动
  * 7. FreeRTOS 任务调度器启动
- * 
- * 作者: yyk
- * 日期: 2025
  */
 
 #include <Arduino.h>
@@ -20,14 +19,19 @@
 #include "sensors/imu.h"
 #include "sensors/barometer.h"
 #include "sensors/uwb.h"
+#include "sensors/gps.h"
+#include "sensors/tof.h"
 #include "fusion/sensor_fusion.h"
 #include "control/motor.h"
+#include "control/mission.h"
 #include "follow/follow.h"
+#include "comm/fc_bridge.h"
 #include "web/server.h"
+#include "vision/camera.h"
 #include "system/task_manager.h"
 
 // ═══════════════════════════════════════════════════════════
-//  WiFi 配置 (根据实际环境修改)
+//  WiFi 配置
 // ═══════════════════════════════════════════════════════════
 
 // AP 模式 (无人机自建热点)
@@ -40,157 +44,126 @@
 #define WIFI_STA_PASSWORD   "YourWiFiPassword"
 
 // ═══════════════════════════════════════════════════════════
-//  全局变量 (单例已在各模块定义)
+//  setup()
 // ═══════════════════════════════════════════════════════════
 
-// UWBLocalizer     uwb;       // uwb.cpp
-// IMUDriver         imu;       // imu.cpp
-// Barometer         baro;      // barometer.cpp
-// SensorFusion      fusion;    // sensor_fusion.cpp
-// MotorController   motors;    // motor.cpp
-// FollowController  followCtrl;// follow.cpp
-// WebServerManager  webServer; // server.cpp
-// TaskManager       taskMgr;   // task_manager.cpp
-
-// ═══════════════════════════════════════════════════════════
-//  setup() — Arduino 标准入口
-// ═══════════════════════════════════════════════════════════
-
-void setup() {
+void setup()
+{
     // ── 1. 串口初始化 ──
     DEBUG_SERIAL.begin(DEBUG_BAUD);
-    delay(500);  // 等待串口稳定
-    
+    delay(500);
+
     DEBUG_SERIAL.println();
-    DEBUG_SERIAL.println("╔══════════════════════════════════════════╗");
-    DEBUG_SERIAL.println("║   NMC 智能无人机伞 v1.0.0               ║");
-    DEBUG_SERIAL.println("║   ESP32-S3 AI 向量指令集优化            ║");
-    DEBUG_SERIAL.println("╚══════════════════════════════════════════╝");
+    DEBUG_SERIAL.println("==============================================");
+    DEBUG_SERIAL.println("  NMC 智能无人机伞 v2.0");
+    DEBUG_SERIAL.println("  ESP32-S3 + F4V3S PLUS 双处理器架构");
+    DEBUG_SERIAL.println("==============================================");
     DEBUG_SERIAL.println();
-    
-    // ── 2. 硬件引脚初始化 ──
+
+    // ── 2. GPIO 初始化 ──
     pinMode(SAFETY_SWITCH_PIN, INPUT_PULLUP);
     pinMode(LED_BUILTIN, OUTPUT);
     digitalWrite(LED_BUILTIN, LOW);
-    
+
     LOG(LOG_TAG_FUSION, "Chip: ESP32-S3 @ %d MHz", getCpuFrequencyMhz());
-    LOG(LOG_TAG_FUSION, "Free heap: %d bytes", ESP.getFreeHeap());
-    LOG(LOG_TAG_FUSION, "PSRAM size: %d bytes", ESP.getPsramSize());
-    
+    LOG(LOG_TAG_FUSION, "Free heap: %d / PSRAM: %d", ESP.getFreeHeap(), ESP.getPsramSize());
+
     // ── 3. 传感器初始化 ──
-    LOG(LOG_TAG_FUSION, "--- Sensor Init ---");
-    
-    if (!imu.begin(4, 500)) {
-        LOG(LOG_TAG_FUSION, "FATAL: IMU initialization failed!");
-        while (1) { digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN)); delay(200); }
-    }
-    LOG(LOG_TAG_FUSION, "  IMU: OK");
-    
-    if (!baro.begin()) {
-        LOG(LOG_TAG_FUSION, "WARNING: Barometer init failed — altitude hold degraded");
-    } else {
-        LOG(LOG_TAG_FUSION, "  Barometer: OK");
-    }
-    
-    if (!uwb.begin()) {
-        LOG(LOG_TAG_FUSION, "WARNING: UWB init failed — positioning unavailable");
-    } else {
-        LOG(LOG_TAG_FUSION, "  UWB: OK");
-    }
-    
-    // ── 4. 融合引擎 ──
+    LOG(LOG_TAG_FUSION, "--- Sensors ---");
+
+    gps.begin();
+    LOG(LOG_TAG_GPS, "  GPS (NEO-M8N): init ok");
+
+    tof.begin();
+    LOG(LOG_TAG_TOF, "  ToF (VL53L1X): init ok");
+
+    uwb.begin();
+    LOG(LOG_TAG_UWB, "  UWB (DW3000): stub — install arduino-dw3000 lib");
+
+    // ── 4. 飞控通信初始化 ──
+    LOG(LOG_TAG_FC, "--- FC Bridge ---");
+    fcBridge.begin();
+
+    // ── 5. 融合引擎 ──
     LOG(LOG_TAG_FUSION, "--- Fusion Engine ---");
-    if (!fusion.begin()) {
-        LOG(LOG_TAG_FUSION, "FATAL: Fusion engine init failed!");
-        while (1) { delay(1000); }
-    }
-    
-    // ── 5. 电机初始化 ──
-    LOG(LOG_TAG_CTRL, "--- Motor Init ---");
-    motors.begin();
-    
-    // ── 6. 跟随控制器 ──
+    fusion.begin();
+
+    // ── 6. 跟随控制器 + 任务规划 ──
     LOG(LOG_TAG_FOLLOW, "--- Follow Controller ---");
     followCtrl.begin();
     followCtrl.setMode(FollowMode::IDLE);
-    
+
+    LOG(LOG_TAG_MISSION, "--- Mission Planner ---");
+    mission.begin();
+
     // ── 7. 校准 ──
     LOG(LOG_TAG_FUSION, "--- Calibration ---");
     fusion.calibrate();
-    
-    // 设置返航点为当前位置
+
     const FusionState& s = fusion.getState();
     followCtrl.setHomePosition(s.posX, s.posY, s.posZ);
-    
-    // ── 8. WiFi + Web 服务 ──
+
+    // ── 8. 摄像头 ──
+    camera.begin();
+
+    // ── 9. WiFi + Web 服务 ──
     LOG(LOG_TAG_WEB, "--- Web Server ---");
-    
 #if WIFI_AP_MODE
-    if (!webServer.begin(WIFI_AP_SSID, WIFI_AP_PASSWORD, true)) {
+    if (!webServer.begin(WIFI_AP_SSID, WIFI_AP_PASSWORD, true))
         LOG(LOG_TAG_WEB, "FATAL: Web server init failed!");
-    }
 #else
     if (!webServer.begin(WIFI_STA_SSID, WIFI_STA_PASSWORD, false)) {
-        LOG(LOG_TAG_WEB, "WiFi STA failed, falling back to AP mode...");
+        LOG(LOG_TAG_WEB, "WiFi STA failed, falling back to AP...");
         webServer.begin(WIFI_AP_SSID, WIFI_AP_PASSWORD, true);
     }
 #endif
-    
-    // ── 9. 注册 WebSocket 命令回调 ──
+
+    // ── 10. 注册 WebSocket 命令回调 ──
     webServer.onCommand([](const char* cmd, int value) {
-        // 自定义命令处理 (扩展)
         LOG(LOG_TAG_WEB, "Custom cmd: %s = %d", cmd, value);
     });
-    
-    // ── 10. 启动 FreeRTOS 任务调度 ──
+
+    // ── 11. 启动 FreeRTOS 任务调度 ──
     LOG(LOG_TAG_FUSION, "--- Starting Tasks ---");
     taskMgr.begin();
-    
-    // ── 11. 启动完成 ──
+
+    // ── 12. 启动完成 ──
     LOG(LOG_TAG_FUSION, "=======================================");
     LOG(LOG_TAG_FUSION, "  SYSTEM READY");
-    LOG(LOG_TAG_FUSION, "  UWB: %s", uwb.isHealthy() ? "ONLINE" : "OFFLINE");
-    LOG(LOG_TAG_FUSION, "  IMU: %s", imu.isCalibrated() ? "CALIBRATED" : "UNCALIBRATED");
-    LOG(LOG_TAG_FUSION, "  Mode: IDLE (waiting for command)");
+    LOG(LOG_TAG_FUSION, "  FC:    %s", fcBridge.isOnline() ? "ONLINE" : "OFFLINE");
+    LOG(LOG_TAG_FUSION, "  GPS:   %s", gps.isHealthy() ? "LOCK" : "NO FIX");
+    LOG(LOG_TAG_FUSION, "  ToF:   %s", tof.isHealthy() ? "OK" : "NO SIGNAL");
+    LOG(LOG_TAG_FUSION, "  Cam:   %s", camera.isInitialized() ? "OK" : "OFF");
+    LOG(LOG_TAG_FUSION, "  Mode:  IDLE");
     LOG(LOG_TAG_FUSION, "=======================================");
-    
-    digitalWrite(LED_BUILTIN, HIGH);  // 系统就绪指示灯
-    
-    // setup() 返回后, Arduino 框架自动调用 loop()
+
+    digitalWrite(LED_BUILTIN, HIGH);
 }
 
 // ═══════════════════════════════════════════════════════════
-//  loop() — Arduino 空闲循环
+//  loop() — FreeRTOS 接管后仅处理统计和心跳
 // ═══════════════════════════════════════════════════════════
-//
-// FreeRTOS 任务接管了所有实时工作，loop() 仅处理:
-// - WebSocket 事件泵 (已在独立任务中)
-// - 非实时维护任务
-// - 统计信息输出
 
-void loop() {
+void loop()
+{
     static uint32_t lastReport = 0;
     uint32_t now = millis();
-    
-    // 每 5 秒输出系统统计
+
     if (now - lastReport > 5000) {
         lastReport = now;
-        
-        SystemStatus status;
-        taskMgr.getStatus(status);
-        
-        DEBUG_SERIAL.printf("\n[SYS] Uptime: %lu s | Heap: %lu | PSRAM: %lu\n",
-                            status.uptime / 1000,
-                            status.freeHeap,
-                            status.freePSRAM);
-        DEBUG_SERIAL.printf("[SYS] Cycles: %lu | Errors: %lu | Battery: %.1fV\n",
-                            status.controlCycles,
-                            status.sensorErrors,
-                            status.batteryVoltage);
+
+        MissionPlanner::MissionStatus status;
+        mission.getStatus(status);
+
+        DEBUG_SERIAL.printf("\n[SYS] Uptime: %lu s | Cycles: %lu | Errors: %lu\n",
+            status.uptime / 1000, status.controlCycles, status.sensorErrors);
+        DEBUG_SERIAL.printf("[SYS] Bat: %.1fV (%dS) | FC: %s | GPS: %s | ToF: %s\n",
+            status.batteryVoltage, status.batteryCells,
+            status.fcOnline ? "ON" : "OFF",
+            status.gpsValid ? "LOCK" : "--",
+            status.tofValid ? "OK" : "--");
     }
-    
-    // 心跳
+
     digitalWrite(LED_BUILTIN, (now / 500) % 2);
-    
     delay(100);
 }
