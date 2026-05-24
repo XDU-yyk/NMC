@@ -9,14 +9,18 @@
 WebServerManager webServer;
 WebServerManager* g_webServerInstance = nullptr;
 
-bool WebServerManager::begin(const char* ssid, const char* password, bool apMode) {
+bool WebServerManager::begin(const char* ssid, const char* password, bool apMode)
+{
     m_apMode = apMode;
     g_webServerInstance = this;
-    
-    if (apMode) {
+
+    if (apMode)
+    {
         WiFi.softAP(ssid, password);
         LOG(LOG_TAG_WEB, "AP: %s @ %s", ssid, WiFi.softAPIP().toString().c_str());
-    } else {
+    }
+    else
+    {
         WiFi.begin(ssid, password);
         LOG(LOG_TAG_WEB, "WiFi: %s", ssid);
         int a = 0;
@@ -24,130 +28,145 @@ bool WebServerManager::begin(const char* ssid, const char* password, bool apMode
         if (WiFi.status() != WL_CONNECTED) { LOG(LOG_TAG_WEB, "WiFi failed!"); return false; }
         LOG(LOG_TAG_WEB, "IP: %s", WiFi.localIP().toString().c_str());
     }
-    
+
     setupMDNS();
-    
-    m_httpServer.on("/", HTTP_GET, []() {
-        g_webServerInstance->m_httpServer.send(200, "text/html", INDEX_HTML);
-    });
-    m_httpServer.onNotFound([]() {
-        g_webServerInstance->m_httpServer.send(404, "text/plain", "Not Found");
-    });
+
+    m_httpServer.on("/", HTTP_GET, []()
+        {
+            g_webServerInstance->m_httpServer.send(200, "text/html", INDEX_HTML);
+        });
+    m_httpServer.onNotFound([]()
+        {
+            g_webServerInstance->m_httpServer.send(404, "text/plain", "Not Found");
+        });
     m_httpServer.begin();
-    
+
     m_wsServer.listen(WS_SERVER_PORT);
-    
+
     LOG(LOG_TAG_WEB, "Ready → http://%s.local", DEVICE_MDNS);
     return true;
 }
 
-bool WebServerManager::setupMDNS() {
+bool WebServerManager::setupMDNS()
+{
     if (!MDNS.begin(DEVICE_MDNS)) return false;
     MDNS.addService("http", "tcp", WEB_SERVER_PORT);
     return true;
 }
 
-void WebServerManager::acceptNewClients() {
+void WebServerManager::acceptNewClients()
+{
     m_wsServer.poll();
-    while (m_wsServer.available()) {
+    while (m_wsServer.available())
+    {
         auto client = m_wsServer.accept();
         LOG(LOG_TAG_WEB, "WS client connected (#%zu)", m_clients.size() + 1);
         m_clients.push_back(std::move(client));
     }
-    
+
     auto it = m_clients.begin();
-    while (it != m_clients.end()) {
-        if (!it->available()) {
+    while (it != m_clients.end())
+    {
+        if (!it->available())
+        {
             LOG(LOG_TAG_WEB, "WS client removed");
             it = m_clients.erase(it);
-        } else { ++it; }
+        }
+        else { ++it; }
     }
 }
 
-void WebServerManager::handleClientMessage(WebsocketsClient& client, WebsocketsMessage msg) {
+void WebServerManager::handleClientMessage(WebsocketsClient& client, WebsocketsMessage msg)
+{
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, msg.data());
     if (err) { LOG(LOG_TAG_WEB, "JSON err: %s", err.c_str()); return; }
-    
+
     const char* cmd = doc["cmd"];
     int value = doc["value"] | 0;
     LOG(LOG_TAG_WEB, "cmd: %s (val=%d)", cmd, value);
-    
-    if      (strcmp(cmd, "hover")  == 0) followCtrl.setMode(FollowMode::HOVER);
+
+    if (strcmp(cmd, "hover") == 0) followCtrl.setMode(FollowMode::HOVER);
     else if (strcmp(cmd, "follow") == 0) followCtrl.setMode(FollowMode::FOLLOW);
     else if (strcmp(cmd, "return") == 0) followCtrl.setMode(FollowMode::RETURN_HOME);
-    else if (strcmp(cmd, "stop")   == 0) { followCtrl.emergencyStop(); followCtrl.setMode(FollowMode::IDLE); }
-    else if (strcmp(cmd, "arm")    == 0) { if (mission.arm()) followCtrl.setMode(FollowMode::HOVER); }
+    else if (strcmp(cmd, "stop") == 0) { followCtrl.emergencyStop(); followCtrl.setMode(FollowMode::IDLE); }
+    else if (strcmp(cmd, "arm") == 0) { if (mission.arm()) followCtrl.setMode(FollowMode::HOVER); }
     else if (strcmp(cmd, "disarm") == 0) { mission.disarm(); followCtrl.setMode(FollowMode::IDLE); }
-    else if (strcmp(cmd, "setDist")   == 0) followCtrl.setTargetDistance(value);
+    else if (strcmp(cmd, "setDist") == 0) followCtrl.setTargetDistance(value);
     else if (strcmp(cmd, "setHeight") == 0) followCtrl.setTargetHeight(value);
-    
+
     if (m_cmdCallback) m_cmdCallback(cmd, value);
 }
 
-void WebServerManager::buildTelemetryJson(JsonDocument& doc) {
+void WebServerManager::buildTelemetryJson(JsonDocument& doc)
+{
     const FusionState& s = fusion.getState();
     const GPSData& gd = gps.getData();
     const ToFData& td = tof.getData();
     const FCState& fc = fcBridge.getState();
-    
+
     // 位置
     doc["posX"] = s.posX; doc["posY"] = s.posY; doc["posZ"] = s.posZ;
     doc["velX"] = s.velX; doc["velY"] = s.velY; doc["velZ"] = s.velZ;
     doc["uncX"] = s.uncertaintyX; doc["uncY"] = s.uncertaintyY; doc["uncZ"] = s.uncertaintyZ;
     doc["converged"] = fusion.isConverged();
-    
+
     // 姿态 (来自飞控)
     doc["roll"] = s.roll; doc["pitch"] = s.pitch; doc["yaw"] = s.yaw;
-    
+
     // GPS
-    doc["gpsValid"]  = gd.valid;
-    doc["gpsSats"]   = gd.satellites;
-    doc["gpsLat"]    = gd.lat;
-    doc["gpsLng"]    = gd.lng;
-    doc["gpsAlt"]    = gd.alt;
-    doc["gpsSpeed"]  = gd.speed;
-    doc["gpsHdop"]   = gd.hdop;
-    
+    doc["gpsValid"] = gd.valid;
+    doc["gpsSats"] = gd.satellites;
+    doc["gpsLat"] = gd.lat;
+    doc["gpsLng"] = gd.lng;
+    doc["gpsAlt"] = gd.alt;
+    doc["gpsSpeed"] = gd.speed;
+    doc["gpsHdop"] = gd.hdop;
+
     // ToF
-    doc["tofValid"]  = td.valid;
-    doc["tofDist"]   = td.distance;  // mm
-    
+    doc["tofValid"] = td.valid;
+    doc["tofDist"] = td.distance;  // mm
+
     // 飞控
-    doc["fcOnline"]  = s.fcOnline;
-    doc["baroAlt"]   = s.altitudeBaro;
-    doc["batV"]      = s.batteryVoltage;
-    doc["batCells"]  = s.batteryCells;
-    doc["armed"]     = mission.isArmed();
-    
+    doc["fcOnline"] = s.fcOnline;
+    doc["baroAlt"] = s.altitudeBaro;
+    doc["batV"] = s.batteryVoltage;
+    doc["batCells"] = s.batteryCells;
+    doc["armed"] = mission.isArmed();
+
     // 跟随
-    doc["mode"]      = (int)followCtrl.getMode();
-    doc["tgtValid"]  = (millis() - s.timestamp) < SIGNAL_LOST_TIMEOUT;
-    
+    doc["mode"] = (int)followCtrl.getMode();
+    doc["tgtValid"] = (millis() - s.timestamp) < SIGNAL_LOST_TIMEOUT;
+
     doc["ts"] = millis();
 }
 
-void WebServerManager::loop() {
+void WebServerManager::loop()
+{
     m_httpServer.handleClient();
     acceptNewClients();
-    
-    for (auto& client : m_clients) {
+
+    for (auto& client : m_clients)
+    {
         client.poll();
-        if (client.available()) {
+        if (client.available())
+        {
             auto msg = client.readBlocking();
             handleClientMessage(client, msg);
         }
     }
 }
 
-void WebServerManager::broadcastTelemetry() {
+void WebServerManager::broadcastTelemetry()
+{
     if (m_clients.empty()) return;
-    
+
     JsonDocument doc;
     buildTelemetryJson(doc);
-    
+
     String out; serializeJson(doc, out);
-    for (auto& client : m_clients) {
+    for (auto& client : m_clients)
+    {
         if (client.available()) client.send(out);
     }
 }

@@ -24,7 +24,8 @@ using namespace websockets;
 
 typedef void (*CommandCallback)(const char* cmd, int value);
 
-class WebServerManager {
+class WebServerManager
+{
 public:
     bool begin(const char* ssid, const char* password, bool apMode = false);
     void loop();
@@ -34,13 +35,13 @@ public:
     uint8_t getClientCount() const { return m_clients.size(); }
 
 private:
-    WebServer        m_httpServer{WEB_SERVER_PORT};
+    WebServer        m_httpServer{ WEB_SERVER_PORT };
     WebsocketsServer m_wsServer;
     std::vector<WebsocketsClient> m_clients;
-    
+
     CommandCallback  m_cmdCallback = nullptr;
     bool m_apMode = false;
-    
+
     void acceptNewClients();
     void handleClientMessage(WebsocketsClient& client, WebsocketsMessage msg);
     void buildTelemetryJson(JsonDocument& doc);
