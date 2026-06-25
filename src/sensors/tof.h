@@ -15,6 +15,7 @@ struct ToFData {
     bool     valid;          // 数据有效
     uint8_t  rangeStatus;    // 0 = 正常, 其他 = 错误码
     uint32_t lastUpdate;     // ms
+    uint32_t errorCount;     // 连续读取失败次数
 };
 
 class ToFSensor {
@@ -24,6 +25,7 @@ public:
 
     const ToFData& getData() const { return m_data; }
     bool isHealthy() const { return m_data.valid && m_data.rangeStatus == 0; }
+    bool isInitialized() const { return m_initialized; }
 
     /* 获取当前高度 (mm) */
     uint16_t getAltitudeMM() const { return m_data.distance; }

@@ -64,8 +64,8 @@
 
 /* ── VL53L1X ToF 激光测距 (I2C Wire) ── */
 #define TOF_I2C_PORT        Wire
-#define TOF_SDA             38
-#define TOF_SCL             37
+#define TOF_SDA             41
+#define TOF_SCL             42
 #define TOF_I2C_FREQ        400000
 #define TOF_TIMING_BUDGET_MS 33     // 33ms = ~30Hz 测距频率
 
