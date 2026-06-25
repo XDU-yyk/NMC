@@ -53,6 +53,12 @@ static void fillSimTelemetry(TelemetryData& data)
     data.armed       = false;
     data.flightMode  = 0;
 
+    // 数据源在线状态
+    data.tofOnline   = false;   // 无硬件
+    data.gpsOnline   = true;    // 模拟数据源在线
+    data.dataSource  = 0;       // sim
+    data.errorFlags  = 0;
+
     // 系统
     data.uptime      = now;
     data.freeHeap    = ESP.getFreeHeap();

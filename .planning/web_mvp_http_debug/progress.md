@@ -1,0 +1,21 @@
+# Web MVP HTTP debug progress
+
+- 2026-06-24: Inspected Web MVP files and confirmed this bug is isolated to AP/HTTP/Web server startup path.
+- 2026-06-24: Patched `server.*` and `web_main.cpp` to force AP mode/config, disable WiFi sleep, add DNS captive portal, add `/ping`, log HTTP requests, and print AP station count.
+- 2026-06-24: Verified `platformio run -e esp32-s3-web-mvp` succeeds; firmware at `.pio/build/esp32-s3-web-mvp/firmware.bin`.
+- 2026-06-24: Verified `platformio run -e esp32-s3-devkitc-1` succeeds; full target still compiles.
+- 2026-06-24: Serial port enumeration is blocked by system permissions, so upload was not attempted.
+- 2026-06-25: User reported Android still keeps loading. Added `src/raw_http_main.cpp` and `esp32-s3-raw-http` PlatformIO target using only `WiFi.h` and `WiFiServer`.
+- 2026-06-25: Verified `platformio run -e esp32-s3-raw-http` succeeds; firmware at `.pio/build/esp32-s3-raw-http/firmware.bin`.
+- 2026-06-25: Re-verified `platformio run -e esp32-s3-web-mvp` still succeeds after adding the diagnostic target.
+- 2026-06-25: User confirmed raw `/ping` returns `pong` on Android.
+- 2026-06-25: Ported `src/web/server.*` HTTP handling from Arduino `WebServer`/DNS to explicit `WiFiServer` responses with `HTTP/1.0`, `Content-Length`, and `Connection: close`.
+- 2026-06-25: Updated `platformio.ini` so the full target excludes `raw_http_main.cpp`.
+- 2026-06-25: Verified `platformio run -e esp32-s3-web-mvp` succeeds after the WiFiServer HTTP port; firmware at `.pio/build/esp32-s3-web-mvp/firmware.bin`.
+- 2026-06-25: Verified `platformio run -e esp32-s3-devkitc-1` succeeds after excluding the raw diagnostic entry.
+- 2026-06-25: User reported formal Web MVP still loads forever. Added `WEB_HTTP_ONLY` build flag to the `esp32-s3-web-mvp` target, disabled WebSocket listener/polling for that build, and made it serve a tiny HTML page first.
+- 2026-06-25: Found `WEB_HTTP_ONLY` was accidentally placed in the full target build flags rather than `esp32-s3-web-mvp`; moved the flag to the correct environment.
+- 2026-06-25: User confirmed the HTTP-only diagnostic page opens on Android.
+- 2026-06-25: Replaced the tiny diagnostic HTML with an HTTP polling MVP dashboard and added `/api/telemetry` JSON responses.
+- 2026-06-25: Verified `platformio run -e esp32-s3-web-mvp` succeeds after adding the HTTP polling dashboard.
+- 2026-06-25: Verified `platformio run -e esp32-s3-devkitc-1` still succeeds after the shared server changes.

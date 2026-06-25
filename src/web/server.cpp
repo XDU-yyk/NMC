@@ -26,21 +26,27 @@ static const char HTTP_ONLY_INDEX[] = R"rawliteral(<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>NMC Web MVP</title>
 <style>
-:root{color-scheme:dark;--bg:#0a0e17;--panel:#111827;--line:#334155;--text:#e2e8f0;--muted:#94a3b8;--ok:#22c55e;--warn:#f59e0b;--blue:#60a5fa;}
+:root{color-scheme:dark;--bg:#0a0e17;--panel:#111827;--line:#334155;--text:#e2e8f0;--muted:#94a3b8;--ok:#22c55e;--warn:#f59e0b;--err:#ef4444;--blue:#60a5fa;}
 *{box-sizing:border-box}
 body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:var(--text);padding:18px;line-height:1.45}
 .wrap{max-width:980px;margin:0 auto}
-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap}
 h1{font-size:1.35rem;margin:0}
 .pill{border:1px solid var(--line);border-radius:999px;padding:6px 10px;color:var(--muted);font-size:.82rem}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
+.pill.ok{border-color:var(--ok);color:var(--ok)}
+.pill.warn{border-color:var(--warn);color:var(--warn)}
+.pill.err{border-color:var(--err);color:var(--err)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;min-height:92px}
 .label{font-size:.78rem;color:var(--muted);margin-bottom:6px}
 .value{font-size:1.45rem;font-weight:700}
 .unit{font-size:.82rem;color:var(--muted);font-weight:400;margin-left:3px}
-.ok{color:var(--ok)}.warn{color:var(--warn)}.blue{color:var(--blue)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.err{color:var(--err)}.blue{color:var(--blue)}
+.tag{display:inline-block;font-size:.7rem;padding:2px 6px;border-radius:4px;margin-left:6px;vertical-align:middle}
+.tag.on{background:var(--ok);color:#000}
+.tag.off{background:var(--line);color:var(--muted)}
+.tag.err-tag{background:var(--err);color:#fff}
 .log{margin-top:12px;color:var(--muted);font-size:.85rem}
-button{background:#1d4ed8;color:white;border:0;border-radius:6px;padding:9px 12px;font-weight:700}
 </style>
 </head>
 <body>
@@ -48,40 +54,69 @@ button{background:#1d4ed8;color:white;border:0;border-radius:6px;padding:9px 12p
 <header>
   <div>
     <h1>NMC Web MVP</h1>
-    <div class="log">HTTP polling mode · ESP32-S3</div>
+    <div class="log">HTTP polling · <span id="dataSrc">sim</span></div>
   </div>
-  <div class="pill" id="net">connecting</div>
+  <div class="pill warn" id="net">connecting</div>
 </header>
 <div class="grid">
   <div class="card"><div class="label">System</div><div class="value ok" id="sys">OK</div><div class="log" id="uptime">--</div></div>
-  <div class="card"><div class="label">ToF Distance</div><div class="value" id="tof">--<span class="unit">mm</span></div></div>
+  <div class="card">
+    <div class="label">ToF Distance <span id="tofTag" class="tag off">off</span></div>
+    <div class="value" id="tof">--<span class="unit">mm</span></div>
+  </div>
   <div class="card"><div class="label">Altitude</div><div class="value" id="alt">--<span class="unit">cm</span></div></div>
   <div class="card"><div class="label">Battery</div><div class="value" id="bat">--<span class="unit">V</span></div></div>
   <div class="card"><div class="label">Attitude</div><div class="value blue" id="att">--</div></div>
-  <div class="card"><div class="label">GPS</div><div class="value" id="gps">--</div></div>
-  <div class="card"><div class="label">Flight Controller</div><div class="value warn" id="fc">offline</div></div>
+  <div class="card">
+    <div class="label">GPS <span id="gpsTag" class="tag off">off</span></div>
+    <div class="value" id="gps">--</div>
+  </div>
+  <div class="card">
+    <div class="label">Flight Controller <span id="fcTag" class="tag off">off</span></div>
+    <div class="value warn" id="fc">offline</div>
+  </div>
   <div class="card"><div class="label">Heap</div><div class="value" id="heap">--<span class="unit">B</span></div></div>
 </div>
+<div class="log" id="errLog"></div>
 <div class="log" id="log">Waiting for telemetry...</div>
 </div>
 <script>
 const $=id=>document.getElementById(id);
 function n(v,d=1){return Number(v||0).toFixed(d)}
+const SRC={0:'sim',1:'tof',2:'gps',3:'fc',4:'mixed'};
+function tag(el,on){
+  el.className='tag '+(on?'on':'off');
+  el.textContent=on?'on':'off';
+}
 function tick(){
  fetch('/api/telemetry?ts='+Date.now(),{cache:'no-store'})
   .then(r=>r.json())
   .then(d=>{
     $('net').textContent='online';
     $('net').className='pill ok';
+    $('dataSrc').textContent=SRC[d.dataSource]||'sim';
     $('tof').innerHTML=n(d.tofDist,0)+'<span class="unit">mm</span>';
+    tag($('tofTag'),d.tofOnline);
     $('alt').innerHTML=n(d.baroAlt,0)+'<span class="unit">cm</span>';
     $('bat').innerHTML=n(d.batV,2)+'<span class="unit">V</span>';
     $('att').textContent='R '+n(d.roll)+' / P '+n(d.pitch)+' / Y '+n(d.yaw);
     $('gps').textContent=d.gpsValid ? (d.gpsSats+' sats') : 'no fix';
+    tag($('gpsTag'),d.gpsOnline);
     $('fc').textContent=d.fcOnline ? 'online' : 'offline';
     $('fc').className=d.fcOnline?'value ok':'value warn';
+    tag($('fcTag'),d.fcOnline);
     $('heap').innerHTML=(d.freeHeap||0)+'<span class="unit">B</span>';
     $('uptime').textContent=Math.floor((d.uptime||0)/1000)+' s';
+    if(d.errorFlags){
+      var errs=[];
+      if(d.errorFlags&1)errs.push('ToF');
+      if(d.errorFlags&2)errs.push('GPS');
+      if(d.errorFlags&4)errs.push('FC');
+      $('errLog').textContent='⚠ Error: '+errs.join(', ');
+      $('errLog').style.color='var(--err)';
+    }else{
+      $('errLog').textContent='';
+    }
     $('log').textContent='Telemetry updated: '+new Date().toLocaleTimeString();
   })
   .catch(e=>{
@@ -335,6 +370,12 @@ void WebServerManager::fillSimData(TelemetryData& data)
     data.armed       = false;
     data.flightMode  = 0;
 
+    // 数据源在线状态（无硬件时模拟离线）
+    data.tofOnline   = false;
+    data.gpsOnline   = true;   // GPS 模拟 fix（模拟数据源在线）
+    data.dataSource  = 0;      // sim
+    data.errorFlags  = 0;
+
     // 系统
     data.uptime      = now;
     data.freeHeap    = ESP.getFreeHeap();
@@ -384,6 +425,12 @@ void WebServerManager::buildTelemetryJson(JsonDocument& doc)
     doc["fcOnline"]   = data.fcOnline;
     doc["armed"]      = data.armed;
     doc["flightMode"] = data.flightMode;
+
+    // 数据源在线状态
+    doc["tofOnline"]   = data.tofOnline;
+    doc["gpsOnline"]   = data.gpsOnline;
+    doc["dataSource"]  = data.dataSource;
+    doc["errorFlags"]  = data.errorFlags;
 
     // 系统
     doc["uptime"]    = data.uptime;

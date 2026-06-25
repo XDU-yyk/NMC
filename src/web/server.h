@@ -41,6 +41,11 @@ struct TelemetryData {
     bool   fcOnline = false;
     bool   armed = false;
     int    flightMode = 0;       // 0=IDLE,1=HOVER,2=FOLLOW,3=RTH,4=LOST
+    // 各数据源在线状态
+    bool   tofOnline = false;
+    bool   gpsOnline = false;
+    int    dataSource = 0;       // 0=sim, 1=tof, 2=gps, 3=fc, 4=mixed
+    uint32_t errorFlags = 0;     // bit0=tof_err, bit1=gps_err, bit2=fc_err
     // 系统
     uint32_t uptime = 0;
     size_t   freeHeap = 0;
