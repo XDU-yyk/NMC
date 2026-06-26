@@ -1,6 +1,6 @@
 /**
  * @file    tof.h
- * @brief   VL53L1X ToF 激光测距驱动 (下视 — 低空高度)
+ * @brief   VL53L1X ToF distance sensor driver.
  */
 
 #ifndef TOF_H
@@ -11,11 +11,12 @@
 #include <VL53L1X.h>
 
 struct ToFData {
-    uint16_t distance;       // 测距值 (mm)
-    bool     valid;          // 数据有效
-    uint8_t  rangeStatus;    // 0 = 正常, 其他 = 错误码
-    uint32_t lastUpdate;     // ms
-    uint32_t errorCount;     // 连续读取失败次数
+    uint16_t distance = 0;       // mm
+    bool     valid = false;
+    uint8_t  rangeStatus = 255;  // 0 = ok, 254 = timeout, 255 = not initialized
+    uint32_t lastUpdate = 0;     // ms
+    uint32_t errorCount = 0;
+    bool     timeout = false;
 };
 
 class ToFSensor {
@@ -27,13 +28,13 @@ public:
     bool isHealthy() const { return m_data.valid && m_data.rangeStatus == 0; }
     bool isInitialized() const { return m_initialized; }
 
-    /* 获取当前高度 (mm) */
     uint16_t getAltitudeMM() const { return m_data.distance; }
 
 private:
     VL53L1X m_vl53l1x;
     ToFData m_data;
     bool    m_initialized = false;
+    uint32_t m_lastReadAttempt = 0;
 };
 
 extern ToFSensor tof;

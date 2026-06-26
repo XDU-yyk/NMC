@@ -21,9 +21,18 @@
 using namespace websockets;
 #endif
 
+/* ── 可调参数（白名单） ── */
+struct TunableParams {
+    uint16_t webPollMs = 1000;      // 前端轮询间隔 (ms)
+    float followDistanceM = 1.5f;   // 跟随目标距离 (m)
+    float maxPitchDeg = 5.0f;       // 最大辅助俯仰角 (°)
+    float maxRollDeg = 5.0f;        // 最大辅助横滚角 (°)
+};
+
+extern TunableParams g_params;
+
 /* ── 遥测数据结构（无硬件依赖） ── */
 struct TelemetryData {
-    // 姿态
     float pitch = 0, roll = 0, yaw = 0;
     // 位置 (mm)
     float posX = 0, posY = 0, posZ = 0;
@@ -46,6 +55,9 @@ struct TelemetryData {
     bool   gpsOnline = false;
     int    dataSource = 0;       // 0=sim, 1=tof, 2=gps, 3=fc, 4=mixed
     uint32_t errorFlags = 0;     // bit0=tof_err, bit1=gps_err, bit2=fc_err
+    uint8_t  tofStatus = 255;    // 0=ok, 254=timeout, 255=not initialized
+    uint32_t tofErrors = 0;
+    uint32_t tofAgeMs = 0;
     // 系统
     uint32_t uptime = 0;
     size_t   freeHeap = 0;

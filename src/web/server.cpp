@@ -11,6 +11,7 @@
 
 WebServerManager webServer;
 WebServerManager* g_webServerInstance = nullptr;
+TunableParams g_params;
 
 static const IPAddress AP_IP(192, 168, 4, 1);
 static const IPAddress AP_GATEWAY(192, 168, 4, 1);
@@ -60,9 +61,10 @@ h1{font-size:1.35rem;margin:0}
 </header>
 <div class="grid">
   <div class="card"><div class="label">System</div><div class="value ok" id="sys">OK</div><div class="log" id="uptime">--</div></div>
-  <div class="card">
-    <div class="label">ToF Distance <span id="tofTag" class="tag off">off</span></div>
+  <div class="card" style="grid-column:span 2">
+    <div class="label">ToF <span id="tofTag" class="tag off">off</span></div>
     <div class="value" id="tof">--<span class="unit">mm</span></div>
+    <div class="log" id="tofDiag"></div>
   </div>
   <div class="card"><div class="label">Altitude</div><div class="value" id="alt">--<span class="unit">cm</span></div></div>
   <div class="card"><div class="label">Battery</div><div class="value" id="bat">--<span class="unit">V</span></div></div>
@@ -97,6 +99,11 @@ function tick(){
     $('dataSrc').textContent=SRC[d.dataSource]||'sim';
     $('tof').innerHTML=n(d.tofDist,0)+'<span class="unit">mm</span>';
     tag($('tofTag'),d.tofOnline);
+    var diag='';
+    if(d.tofStatus!==undefined)diag+='status='+d.tofStatus+' ';
+    if(d.tofErrors!==undefined)diag+='err='+d.tofErrors+' ';
+    if(d.tofAgeMs!==undefined)diag+='age='+d.tofAgeMs+'ms';
+    $('tofDiag').textContent=diag;
     $('alt').innerHTML=n(d.baroAlt,0)+'<span class="unit">cm</span>';
     $('bat').innerHTML=n(d.batV,2)+'<span class="unit">V</span>';
     $('att').textContent='R '+n(d.roll)+' / P '+n(d.pitch)+' / Y '+n(d.yaw);
@@ -283,6 +290,63 @@ void WebServerManager::handleHttpRequest(WiFiClient& client)
         serializeJson(doc, out);
         sendJson(client, out);
     }
+    else if (requestLine.startsWith("GET /api/params "))
+    {
+        JsonDocument doc;
+        doc["webPollMs"]       = g_params.webPollMs;
+        doc["followDistanceM"] = g_params.followDistanceM;
+        doc["maxPitchDeg"]     = g_params.maxPitchDeg;
+        doc["maxRollDeg"]      = g_params.maxRollDeg;
+        String out;
+        serializeJson(doc, out);
+        sendJson(client, out);
+    }
+    else if (requestLine.startsWith("POST /api/params "))
+    {
+        // 等 body 到达
+        delay(50);
+        String body;
+        while (client.connected() && client.available()) {
+            char c = client.read();
+            if (c == -1) break;
+            body += c;
+        }
+        LOG(LOG_TAG_WEB, "POST body: %s", body.c_str());
+        JsonDocument doc;
+        if (deserializeJson(doc, body) == DeserializationError::Ok) {
+            if (doc["webPollMs"].is<uint16_t>()) {
+                uint16_t v = doc["webPollMs"].as<uint16_t>();
+                if (v >= 200 && v <= 5000) {
+                    g_params.webPollMs = v;
+                    LOG(LOG_TAG_WEB, "param webPollMs=%u", v);
+                }
+            }
+            if (doc["followDistanceM"].is<float>()) {
+                float v = doc["followDistanceM"].as<float>();
+                if (v >= 0.5f && v <= 5.0f) {
+                    g_params.followDistanceM = v;
+                    LOG(LOG_TAG_WEB, "param followDistanceM=%.1f", v);
+                }
+            }
+            if (doc["maxPitchDeg"].is<float>()) {
+                float v = doc["maxPitchDeg"].as<float>();
+                if (v >= 1.0f && v <= 15.0f) {
+                    g_params.maxPitchDeg = v;
+                    LOG(LOG_TAG_WEB, "param maxPitchDeg=%.1f", v);
+                }
+            }
+            if (doc["maxRollDeg"].is<float>()) {
+                float v = doc["maxRollDeg"].as<float>();
+                if (v >= 1.0f && v <= 15.0f) {
+                    g_params.maxRollDeg = v;
+                    LOG(LOG_TAG_WEB, "param maxRollDeg=%.1f", v);
+                }
+            }
+            sendText(client, "ok\n");
+        } else {
+            sendText(client, "bad json\n");
+        }
+    }
     else
     {
         sendIndex(client);
@@ -375,6 +439,9 @@ void WebServerManager::fillSimData(TelemetryData& data)
     data.gpsOnline   = true;   // GPS 模拟 fix（模拟数据源在线）
     data.dataSource  = 0;      // sim
     data.errorFlags  = 0;
+    data.tofStatus   = 255;    // not initialized
+    data.tofErrors   = 0;
+    data.tofAgeMs    = 0;
 
     // 系统
     data.uptime      = now;
@@ -431,11 +498,17 @@ void WebServerManager::buildTelemetryJson(JsonDocument& doc)
     doc["gpsOnline"]   = data.gpsOnline;
     doc["dataSource"]  = data.dataSource;
     doc["errorFlags"]  = data.errorFlags;
+    doc["tofStatus"]  = data.tofStatus;
+    doc["tofErrors"]  = data.tofErrors;
+    doc["tofAgeMs"]   = data.tofAgeMs;
 
     // 系统
     doc["uptime"]    = data.uptime;
     doc["freeHeap"]  = data.freeHeap;
     doc["chipTemp"]  = data.chipTemp;
+    doc["tofStatus"]   = data.tofStatus;
+    doc["tofErrors"]   = data.tofErrors;
+    doc["tofAgeMs"]    = data.tofAgeMs;
     doc["clients"]   = data.clientCount;
 
     doc["ts"] = millis();
