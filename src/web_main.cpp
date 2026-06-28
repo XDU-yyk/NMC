@@ -230,7 +230,8 @@ void loop()
         const auto& gd = gps.getData();
         Serial.printf("[SYS] %lus heap=%u stations=%u "
             "tof:init=%d valid=%d status=%u dist=%u err=%lu age=%lu ok=%lu fail=%lu miss=%lu rec=%lu fault=%s "
-            "gps:online=%d valid=%d sats=%u chars=%u\n",
+            "gps:online=%d valid=%d sats=%u chars=%u "
+            "pass=%u fail=%u fix=%u hdop=%.1f age=%u\n",
             (now - g_startTime) / 1000,
             ESP.getFreeHeap(),
             WiFi.softAPgetStationNum(),
@@ -242,7 +243,9 @@ void loop()
             static_cast<unsigned long>(td.readyMisses),
             static_cast<unsigned long>(td.recoveries),
             td.lastFault,
-            gd.online, gd.valid, gd.satellites, gd.charsProcessed);
+            gd.online, gd.valid, gd.satellites, gd.charsProcessed,
+            gd.passedChecksum, gd.failedChecksum, gd.sentencesWithFix,
+            gd.hdop, gd.age);
     }
 
     delay(10);

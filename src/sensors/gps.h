@@ -29,10 +29,12 @@ struct GPSData {
     uint32_t lastUpdate = 0;      // 最后更新 (ms)
     // 诊断统计
     uint32_t charsProcessed  = 0; // 已处理 NMEA 字符数
-    uint32_t sentencesWithFix = 0;// 含定位的语句数
+    uint32_t passedChecksum  = 0; // 通过校验的语句数
     uint32_t failedChecksum  = 0; // 校验失败数
+    uint32_t sentencesWithFix = 0;// 含定位的语句数
     uint32_t lastCharMs      = 0; // 最后收到字符时间戳
     uint32_t lastFixMs       = 0; // 最后有效定位时间戳
+    uint32_t lastCharAgeMs   = 0; // 距最后一次收到字符的时长
 };
 
 class GPSDriver {

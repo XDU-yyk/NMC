@@ -60,7 +60,7 @@
 #define GPS_UART_NUM        1
 #define GPS_RX_PIN          18
 #define GPS_TX_PIN          15
-#define GPS_BAUD            115200
+#define GPS_BAUD            9600
 
 /* ── VL53L1X ToF 激光测距 (I2C Wire) ── */
 #define TOF_I2C_PORT        Wire1
