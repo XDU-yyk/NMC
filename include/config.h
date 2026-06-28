@@ -63,11 +63,12 @@
 #define GPS_BAUD            115200
 
 /* ── VL53L1X ToF 激光测距 (I2C Wire) ── */
-#define TOF_I2C_PORT        Wire
+#define TOF_I2C_PORT        Wire1
 #define TOF_SDA             41
 #define TOF_SCL             42
-#define TOF_I2C_FREQ        400000
-#define TOF_TIMING_BUDGET_MS 33     // 33ms = ~30Hz 测距频率
+#define TOF_I2C_FREQ        10000
+#define TOF_TIMING_BUDGET_MS 100    // conservative bench diagnostic budget
+#define TOF_XSHUT_PIN       10      // VL53L1X XSHUT; conflicts with camera D2 if OV2640 is enabled later
 
 /* ── UWB DW3000 (SPI2) ── */
 #define UWB_SPI_HOST        SPI2_HOST
@@ -125,7 +126,7 @@
  * 传感器采样频率 (Hz)
  * ================================================================ */
 #define GPS_SAMPLE_RATE         10      // NEO-M8N 最高 10Hz
-#define TOF_SAMPLE_RATE         30      // VL53L1X ~30Hz
+#define TOF_SAMPLE_RATE         1       // VL53L1X bench diagnostic rate
 #define UWB_SAMPLE_RATE         20
 #define FC_ATTITUDE_RATE        100     // 飞控姿态读取频率
 #define FUSION_OUTPUT_RATE      100     // EKF 输出频率

@@ -17,6 +17,12 @@ struct ToFData {
     uint32_t lastUpdate = 0;     // ms
     uint32_t errorCount = 0;
     bool     timeout = false;
+    uint32_t totalReads = 0;
+    uint32_t validReads = 0;
+    uint32_t failedReads = 0;
+    uint32_t readyMisses = 0;
+    uint32_t recoveries = 0;
+    const char* lastFault = "none";
 };
 
 class ToFSensor {
@@ -31,10 +37,22 @@ public:
     uint16_t getAltitudeMM() const { return m_data.distance; }
 
 private:
+    void recoverBus();
+    bool probeCleanBus();
+    bool configureSensor();
+    bool writeReg8Checked(uint16_t reg, uint8_t value, const char* fault);
+    bool readReg16Checked(uint16_t reg, uint16_t& value, const char* fault);
+    bool softResetSensor();
+    bool readMeasurement(uint16_t& distance, uint8_t& rangeStatus);
+    bool clearInterrupt();
+    uint8_t convertRangeStatus(uint8_t rawStatus, uint8_t streamCount) const;
+
     VL53L1X m_vl53l1x;
     ToFData m_data;
     bool    m_initialized = false;
     uint32_t m_lastReadAttempt = 0;
+    uint32_t m_lastRecoverAttempt = 0;
+    uint32_t m_lastReadyMissLog = 0;
 };
 
 extern ToFSensor tof;

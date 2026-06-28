@@ -1,0 +1,187 @@
+# ToF I2C Progress Log
+
+## 2026-06-27
+
+- Started a file-backed diagnostic plan for intermittent VL53L1X I2C errors.
+- Confirmed current source already has mitigations:
+  - 50kHz I2C.
+  - 50ms timing budget.
+  - 200ms sampling interval.
+  - invalid distance rejection.
+  - delayed recovery after stale data.
+- User-provided new evidence shows the sensor can return valid ranges but still triggers Wire request errors.
+- Analyzed `esp32-s3-web-mvp` build filter: no concurrent FreeRTOS ToF task is included in the Web MVP target.
+- Analyzed Pololu VL53L1X read path: one `read(false)` can include 17-byte result read, calibration reads, DSS writes, and interrupt clear.
+- Analyzed ESP32 Arduino Wire: `requestFrom()` errors are logged by Wire after `i2cRead()`, and are not reliably represented by Pololu `last_status`.
+- Implemented more observable and conservative ToF driver:
+  - 100ms measurement budget.
+  - 200ms inter-measurement/sample period.
+  - 5Hz ToF sample-rate macro.
+  - bus recovery before init.
+  - data-ready gate.
+  - counters for ok/fail/miss/recovery.
+- `pio run -e esp32-s3-web-mvp` compiled successfully after the change.
+- Uploaded the data-ready diagnostic firmware and captured a 60s serial sample.
+- Result was not acceptable:
+  - Wire errors continued.
+  - `readyMisses` reached 207.
+  - `valid` became stale at times.
+- Decision: remove `dataReady()` from the regular path; it increases I2C reads and does not reliably predict valid frames on this module.
+- Tested low-frequency full-read strategy at 50kHz / 2Hz: improved but still showed Wire errors.
+- Tested hard-isolation settings at Wire1 / 10kHz / 1Hz: ToF stayed valid and Wire errors dropped to four visible events in 60s.
+- Next step: create and flash a ToF-only firmware with no WiFi, GPS, or Web to separate hardware/driver issues from system-load effects.
+- Created `src/tof_only_main.cpp` and `[env:esp32-s3-tof-only]`.
+- ToF-only isolation still reproduced Wire `requestFrom()` errors.
+- Conclusion: WiFi/GPS/Web are not the main cause; the remaining error is at the I2C/module/library layer.
+- After restoring Web MVP, captured a startup crash:
+  - polluted scan with phantom addresses plus `0x29`;
+  - Wire `Error 263`;
+  - `IntegerDivideByZero` inside VL53L1X init path.
+- Added startup scan guard: only call Pololu init when exactly one I2C device is found and it is `0x29`; otherwise delay and retry.
+- Built and uploaded final Web MVP with scan guard.
+- Final short serial verification:
+  - polluted scan was detected and retried;
+  - second scan was clean;
+  - Web MVP booted normally;
+  - ToF remained `valid=1`;
+  - no startup crash recurred.
+- Continued diagnosis after user reported reset logs with repeated `requestFrom()` `-1/263` despite wiring being checked.
+- Implemented a safer ToF read path:
+  - direct 17-byte result-frame read with byte-count validation;
+  - invalid-frame filtering before updating cached distance;
+  - short transient failures no longer immediately flip the cached valid distance offline;
+  - `tof.begin()` now performs multiple bus-recovery and address-probe attempts;
+  - Web MVP retries ToF initialization every 5 seconds when startup init fails.
+- Tested a single-shot ranging state machine. It reduced visible Wire logs in one sample, but caused too many startup/read failures and was reverted.
+- Final chosen strategy is continuous sensor ranging plus low-rate explicit result-frame reads, because it kept `tof:init=1 valid=1` more reliably in earlier samples.
+- Built and uploaded `esp32-s3-web-mvp` to `COM55` after the final changes.
+- Current blocking observation after the last upload: ToF is sometimes not acknowledging `0x29` and Pololu init fails reading the model ID. Firmware now retries, but if `0x29` remains absent after ESP32 reset, the sensor needs a full power cycle or XSHUT-controlled reset.
+- Continued the completion audit instead of treating the mitigation as done.
+- Audited a remaining software bug: after an in-run recovery failed, `web_main.cpp` could keep `g_tofInit=true` while `tof.isInitialized()` had become false, preventing the 5s background init retry path from running.
+- Fixed `web_main.cpp` to synchronize `g_tofInit = tof.isInitialized()` on each loop.
+- Added `ToFData::lastFault` and fault labels:
+  - `probe_ack` for missing `0x29` ACK during bus probe;
+  - `init_model` for VL53L1X model/register init failure;
+  - `read_reg`, `read_frame`, and `read_byte` for result-frame read failures.
+- Rebuilt and uploaded `esp32-s3-web-mvp` to `COM55` successfully.
+- Verification sample after upload showed repeated retry init with `fault=init_model`:
+  - `tof:init=0 valid=0 status=255 dist=0 err=1 ... fault=init_model`
+  - Wire still logged `requestFrom(): i2cRead returned Error -1` during Pololu `init()`.
+- Current evidence now ties the active failure to initialization/model-ID register reads, not the normal 1Hz result-frame read path.
+- Added optional `TOF_XSHUT_PIN` config, defaulting to `-1` so current wiring is unchanged.
+- Added a pre-init VL53L1X model-ID check before calling Pololu `init()`:
+  - expected `0xEACC`;
+  - failure is logged as `VL53L1X model check failed` and `fault=init_model`;
+  - this avoids running the full library init sequence when the model/register read is already unstable.
+- Built and uploaded `esp32-s3-web-mvp` to `COM55` successfully.
+- Short verification sample showed:
+  - `VL53L1X model check failed: id=0xFFFF i2c=2`;
+  - repeated `fault=init_model`;
+  - this confirms the live failure is an initialization/register-read failure with an all-ones readback, not a normal measurement result-frame parse problem.
+- Replaced the Pololu `readReg16Bit()` pre-init model check with a local checked register read:
+  - if the register-address write phase fails, it returns immediately and avoids a useless `requestFrom()`;
+  - if the read returns fewer than 2 bytes, it drains the buffer, records `init_model`, and returns false;
+  - this reduces avoidable Wire log noise while preserving the same failure diagnosis.
+- Built and uploaded `esp32-s3-web-mvp` to `COM55` successfully.
+- Short verification sample after the checked read showed:
+  - repeated `VL53L1X model check failed: id=0x0000 i2c=2`;
+  - one visible Wire `requestFrom(): i2cRead returned Error -1` in about 30s;
+  - repeated `[SYS] ... fault=init_model`;
+  - the ToF still does not reach the expected `0xEACC` model ID.
+- Updated `esp32-s3-tof-only` diagnostic firmware output to include `fault=` and `miss=` so it can use the same fault labels as Web MVP.
+- Built `esp32-s3-tof-only` successfully:
+  - command: `C:\Users\yyk\.platformio\penv\Scripts\platformio.exe run -e esp32-s3-tof-only`
+  - result: success, firmware size about 303 KB.
+- Did not upload ToF-only in this pass, to avoid replacing the Web MVP firmware without an explicit hardware-retetesting step.
+- Resumed after context handoff and checked the active ToF diagnostic plan.
+- Built `esp32-s3-i2c-scan` after the scanner rewrite; first build failed because isolated `i2c_scan_main.cpp` used `Wire1` through `config.h` without including `<Wire.h>`.
+- Fixed `src/i2c_scan_main.cpp` by adding `#include <Wire.h>`.
+- Rebuilt `esp32-s3-i2c-scan` successfully.
+- Rebuilt `esp32-s3-web-mvp` successfully and uploaded it to `COM55`.
+- Captured a live serial sample from that Web MVP build:
+  - repeated `fault=init_model`;
+  - `VL53L1X model check failed: id=0x0000 i2c=2`;
+  - occasional `0x29 did not ACK before init`.
+- Added guarded initialization hardening:
+  - `probeCleanBus()` now requires stable repeated ACKs;
+  - added checked 8-bit register writes;
+  - added guarded `SOFT_RESET` attempt during model-ID retry;
+  - kept the normal 1Hz measurement path unchanged.
+- Built all relevant targets successfully after the hardening:
+  - `esp32-s3-web-mvp`;
+  - `esp32-s3-tof-only`;
+  - `esp32-s3-i2c-scan`.
+- Uploaded the latest `esp32-s3-web-mvp` firmware to `COM55`.
+- Captured a 70s live serial sample after upload:
+  - repeated `VL53L1X address 0x29 did not ACK stably before init`;
+  - `[SYS] ... tof:init=0 valid=0 status=255 ... fault=probe_ack`;
+  - occasional bad model IDs `0x001F`, `0x1FFF`, and `0x3FFF`;
+  - no successful `tof:init=1` in the sample.
+- Current conclusion: software now reports and handles the failure safely, but the live board/module state still needs a real ToF-side reset through XSHUT, a ToF power cycle, pull-up/power validation, or module replacement.
+- Enhanced `src/i2c_scan_main.cpp` as a stronger standalone diagnostic:
+  - prints idle SDA/SCL levels before and after bus recovery;
+  - prints repeated `0x29` ACK statistics;
+  - reads VL53L1X model ID 20 times;
+  - attempts guarded soft reset and reads model ID 20 more times.
+- Built `esp32-s3-i2c-scan` successfully.
+- Uploaded `esp32-s3-i2c-scan` to `COM55`, temporarily replacing Web MVP for diagnosis.
+- Captured about 75 seconds of standalone scanner serial output:
+  - idle before recovery was `SDA=1 SCL=1`;
+  - after recovery it reported `SDA=0 SCL=1`;
+  - scan found dozens of phantom I2C addresses;
+  - `0x29 ACK: 10/30 err2=18 err5=2`;
+  - VL53L1X model-ID reads were `ok=0/20 expected=0 write_fail=18 short_read=2`;
+  - soft reset write failed with `i2c=2`;
+  - post-reset model-ID reads were still `ok=0/20 expected=0 write_fail=18 short_read=2`.
+- Stronger conclusion: the active failure is below the Web/ToF driver layer. The ESP32 cannot consistently address the module, and the module/bus likely needs real XSHUT/power reset, pull-up/power validation, or module replacement.
+- Rebuilt `esp32-s3-web-mvp` successfully after scanner diagnosis.
+- Uploaded `esp32-s3-web-mvp` back to `COM55` so the board is no longer left on the standalone scanner firmware.
+- Captured a short Web MVP serial confirmation:
+  - `[SYS] ... tof:init=0 ... fault=probe_ack` and one `fault=init_model`;
+  - GPS continued updating, confirming Web MVP runtime is active again;
+  - the ToF failure mode matches the standalone scanner evidence.
+- 2026-06-28 blocked audit:
+  - current `include/config.h` still has `TOF_XSHUT_PIN -1`, so firmware cannot perform a real sensor-side XSHUT reset;
+  - no new evidence was available for a ToF power-cycle, XSHUT wiring, pull-up/power repair, or module replacement;
+  - the only remaining plan item is the hardware gate: make the VL53L1X respond stably on I2C, then rerun Web MVP or ToF-only verification.
+- User wired VL53L1X XSHUT to GPIO10.
+- Updated `include/config.h`:
+  - `TOF_XSHUT_PIN` is now `10`;
+  - noted that GPIO10 conflicts with `CAM_PIN_Y4` if the OV2640 parallel camera path is enabled later.
+- Built `esp32-s3-web-mvp` successfully after enabling GPIO10 XSHUT.
+- Built `esp32-s3-tof-only` successfully after enabling GPIO10 XSHUT.
+- Uploaded `esp32-s3-web-mvp` to `COM55`.
+- Captured a 70s serial sample:
+  - ToF initialized and stayed online: `tof:init=1`;
+  - most samples were valid: `valid=1 status=0 dist=61-64 fault=none`;
+  - valid reads reached `ok=58`;
+  - recoveries stayed `rec=0`;
+  - one visible `requestFrom(): i2cRead returned Error 263` appeared, plus a few transient `fault=read_reg` / fail-count increments;
+  - the transient read errors did not knock ToF offline or force recovery.
+- Current status after XSHUT: the startup/init failure is solved; remaining Wire errors are occasional read-level transients that the driver now tolerates with cached valid data and diagnostics.
+- Captured an additional 90s Web MVP stability sample without reflashing:
+  - every `[SYS]` line kept `tof:init=1 valid=1 status=0`;
+  - distance stayed around `61-64 mm`;
+  - recoveries stayed `rec=0`;
+  - valid reads increased from `ok=125` to `ok=193`;
+  - occasional `requestFrom()` `Error 263` and `Error -1` still appeared, but only as tolerated read-level transients;
+  - transient `fault=read_reg` cleared back to `fault=none`.
+- Completion status: ToF no longer gets stuck after reset; Web MVP has real ToF telemetry with diagnostics and graceful handling of remaining transient I2C read failures.
+- User asked why serial sometimes shows one `[SYS]` line split into two entries and why a Wire error sometimes appears as `requestFrom(): i2cRead returned Error ` without a visible numeric suffix.
+- Reviewed the screenshot and `src/web_main.cpp` logging logic.
+- Finding:
+  - the `[SYS]` line is emitted by one `Serial.printf(...)` call;
+  - the screenshot split occurs at a 64-byte chunk boundary and continues in the next entry, so it is serial-monitor chunking rather than duplicate firmware output;
+  - truncated-looking Wire error output can be the same display/chunking effect.
+- No code change was made for this because the firmware logging logic is not the cause.
+- User asked why most output is complete while only a small part is split, and whether residual `Error -1` / `Error 263` can be fully eliminated.
+- Conclusion:
+  - split output is timing-dependent USB CDC / serial-monitor chunk display; most lines are merged by the monitor, some are shown at packet/chunk boundaries such as 64 bytes;
+  - firmware cannot force every serial monitor to display stream data as complete lines, although shorter logs or a line-buffered monitor can make it disappear visually;
+  - residual Wire errors are now transient I2C read failures, not the old fatal init failure;
+  - total elimination requires hardware-layer cleanup, not just code changes.
+- Completion audit for the split-line / residual Wire-error question:
+  - `src/web_main.cpp` still emits `[SYS]` via one `Serial.printf(...)` call, so firmware is not intentionally printing two logical messages;
+  - `findings.md` records why most lines are merged while some split at USB/serial packet boundaries;
+  - `findings.md` and `task_plan.md` record that residual `Error -1` / `Error 263` is tolerated as transient I2C read failure after XSHUT, with ToF staying initialized and valid;
+  - no firmware change is required unless the user wants shorter cosmetic log lines or performs hardware cleanup to reduce I2C errors further.

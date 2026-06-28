@@ -1,13 +1,16 @@
 /**
  * @file    web_main.cpp
- * @brief   ESP32-S3 Web MVP entry with ToF diagnostics.
+ * @brief   ESP32-S3 Web MVP — GPS 只读诊断 + ToF
+ * 
+ * 当前阶段：GPS NEO-M8N 只读诊断，不接飞控，不做控制，不做融合。
+ * GPS 默认 offline/no fix，收到 NMEA 后 online=true，定位有效后 valid=true。
  */
 
 #include <Arduino.h>
 #include "config.h"
 #include "web/server.h"
 #include "sensors/tof.h"
-#include "comm/fc_bridge.h"
+#include "sensors/gps.h"
 #include "esp_task_wdt.h"
 
 #define WIFI_AP_SSID        "NMC-SmartUmbrella"
@@ -15,6 +18,7 @@
 
 static uint32_t g_startTime = 0;
 static bool g_tofInit = false;
+static uint32_t g_lastTofRetry = 0;
 
 static float simTofDistance(float t) {
     return 1500.0f + 700.0f * sinf(t * 0.15f);
@@ -25,6 +29,7 @@ static void fillTelemetry(TelemetryData& data)
     uint32_t now = millis();
     float t = now * 0.001f;
 
+    // 模拟姿态/电池（始终有）
     data.roll  = 6.0f * sinf(t * 0.25f);
     data.pitch = 4.0f * sinf(t * 0.20f + 1.2f);
     data.yaw   = 25.0f * sinf(t * 0.10f + 2.5f);
@@ -34,28 +39,33 @@ static void fillTelemetry(TelemetryData& data)
     data.altitude = 120.0f + 40.0f * sinf(t * 0.10f);
     data.batteryVoltage = 11.4f - 0.02f * (t / 60.0f);
     data.batteryCells = 3;
-    data.gpsValid = true;
-    data.gpsSats  = 8 + (int)(sinf(t * 0.1f) * 2);
-    data.gpsLat   = 39.9042;
-    data.gpsLng   = 116.4074;
-    data.gpsAlt   = 50.0f;
-    data.gpsSpeed = 0.5f + 0.3f * sinf(t * 0.1f);
-    data.gpsOnline = true;
-    // 飞控 — 尝试读真实数据
-    fcBridge.update();
-    if (fcBridge.isOnline()) {
-        const auto& fc = fcBridge.getState();
-        data.roll     = fc.roll;
-        data.pitch    = fc.pitch;
-        data.yaw      = fc.yaw;
-        data.altitude = fc.altitude;
-        data.batteryVoltage = fc.batteryVoltage;
-        data.batteryCells   = fc.batteryCells;
-        data.armed    = fc.armed;
-        data.fcOnline = true;
-        data.dataSource = 3;
-    }
-    data.gpsOnline = true;
+
+    // GPS — 默认 offline/no fix
+    data.gpsOnline = false;
+    data.gpsValid = false;
+    data.gpsSats = 0;
+    data.gpsLat = 0; data.gpsLng = 0;
+    data.gpsAlt = 0; data.gpsSpeed = 0;
+    data.gpsAgeMs = 0;
+    data.gpsChars = 0;
+    data.gpsSentences = 0;
+    data.gpsFailedChecksum = 0;
+
+    // 尝试读真实 GPS
+    const auto& gd = gps.getData();
+    data.gpsOnline = gd.online;
+    data.gpsValid  = gd.valid;
+    data.gpsSats   = gd.satellites;
+    data.gpsLat    = gd.lat;
+    data.gpsLng    = gd.lng;
+    data.gpsAlt    = gd.alt;
+    data.gpsSpeed  = gd.speed;
+    data.gpsAgeMs  = gd.age;
+    data.gpsChars  = gd.charsProcessed;
+    data.gpsSentences = gd.sentencesWithFix;
+    data.gpsFailedChecksum = gd.failedChecksum;
+
+    // ToF
     data.fcOnline = false;
     data.armed = false;
     data.flightMode = 0;
@@ -63,7 +73,6 @@ static void fillTelemetry(TelemetryData& data)
     data.errorFlags = 0;
 
     if (g_tofInit) {
-        tof.update();
         const auto& td = tof.getData();
         data.tofStatus = td.rangeStatus;
         data.tofErrors = td.errorCount;
@@ -93,19 +102,28 @@ static void fillTelemetry(TelemetryData& data)
 static bool scanForTof()
 {
     TOF_I2C_PORT.begin(TOF_SDA, TOF_SCL);
-    TOF_I2C_PORT.setTimeOut(80);
-    TOF_I2C_PORT.setClock(100000);
+    TOF_I2C_PORT.setTimeOut(150);
+    TOF_I2C_PORT.setClock(TOF_I2C_FREQ);
 
     Serial.printf("  Scanning I2C on SDA=%d SCL=%d\n", TOF_SDA, TOF_SCL);
+    uint8_t foundCount = 0;
+    bool foundTof = false;
     for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
         TOF_I2C_PORT.beginTransmission(addr);
         uint8_t err = TOF_I2C_PORT.endTransmission();
         if (err == 0) {
+            foundCount++;
             Serial.printf("  I2C device found: 0x%02X%s\n",
                 addr, addr == 0x29 ? " (VL53L1X default)" : "");
-            if (addr == 0x29) return true;
+            foundTof = foundTof || (addr == 0x29);
         }
         if ((addr & 0x0F) == 0) esp_task_wdt_reset();
+    }
+    if (foundTof && foundCount == 1) {
+        return true;
+    }
+    if (foundTof) {
+        Serial.printf("  ToF: unstable I2C scan (%u devices), retry later\n", foundCount);
     }
     return false;
 }
@@ -113,7 +131,14 @@ static bool scanForTof()
 static void initTof()
 {
     Serial.println("--- ToF Sensor ---");
-    bool found = scanForTof();
+    bool found = false;
+    for (uint8_t attempt = 0; attempt < 5 && !found; attempt++) {
+        found = scanForTof();
+        if (!found) {
+            delay(250);
+            esp_task_wdt_reset();
+        }
+    }
     if (!found) {
         Serial.println("  ToF: 0x29 not found, using simulated distance");
         g_tofInit = false;
@@ -145,8 +170,8 @@ void setup()
 
     Serial.println();
     Serial.println("==============================================");
-    Serial.println("  NMC Smart Umbrella - Web MVP ToF Diagnostic");
-    Serial.println("  ESP32-S3, HTTP polling, ToF optional");
+    Serial.println("  NMC Smart Umbrella - Web MVP");
+    Serial.println("  GPS diagnostic + ToF, no FC");
     Serial.println("==============================================");
     Serial.println();
 
@@ -154,10 +179,10 @@ void setup()
     initTof();
     esp_task_wdt_reset();
 
-    // 飞控 MSP 通信
-    Serial.println("--- Flight Controller ---");
-    fcBridge.begin();
-    Serial.printf("  FC: %s\n", fcBridge.isOnline() ? "ONLINE" : "OFFLINE (check UART wiring)");
+    // GPS (UART1, RX=18 TX=15)
+    Serial.println("--- GPS ---");
+    gps.begin();
+    Serial.printf("  GPS: UART1 @ %d, RX=%d TX=%d\n", GPS_BAUD, GPS_RX_PIN, GPS_TX_PIN);
     esp_task_wdt_reset();
     Serial.println();
 
@@ -184,6 +209,17 @@ void setup()
 
 void loop()
 {
+    gps.update();
+    g_tofInit = tof.isInitialized();
+    if (g_tofInit) {
+        tof.update();
+    } else if (millis() - g_lastTofRetry >= 5000) {
+        g_lastTofRetry = millis();
+        Serial.println("[TOF] Retry init");
+        tof.begin();
+        g_tofInit = tof.isInitialized();
+    }
+
     webServer.loop();
 
     static uint32_t lastPrint = 0;
@@ -191,16 +227,22 @@ void loop()
     if (now - lastPrint > 5000) {
         lastPrint = now;
         const auto& td = tof.getData();
-        Serial.printf("[SYS] %lus heap=%u stations=%u tofInit=%d valid=%d status=%u dist=%u errors=%lu age=%lu\n",
+        const auto& gd = gps.getData();
+        Serial.printf("[SYS] %lus heap=%u stations=%u "
+            "tof:init=%d valid=%d status=%u dist=%u err=%lu age=%lu ok=%lu fail=%lu miss=%lu rec=%lu fault=%s "
+            "gps:online=%d valid=%d sats=%u chars=%u\n",
             (now - g_startTime) / 1000,
             ESP.getFreeHeap(),
             WiFi.softAPgetStationNum(),
-            g_tofInit,
-            td.valid,
-            td.rangeStatus,
-            td.distance,
+            g_tofInit, td.valid, td.rangeStatus, td.distance,
             static_cast<unsigned long>(td.errorCount),
-            static_cast<unsigned long>(td.lastUpdate ? now - td.lastUpdate : 0));
+            static_cast<unsigned long>(td.lastUpdate ? now - td.lastUpdate : 0),
+            static_cast<unsigned long>(td.validReads),
+            static_cast<unsigned long>(td.failedReads),
+            static_cast<unsigned long>(td.readyMisses),
+            static_cast<unsigned long>(td.recoveries),
+            td.lastFault,
+            gd.online, gd.valid, gd.satellites, gd.charsProcessed);
     }
 
     delay(10);

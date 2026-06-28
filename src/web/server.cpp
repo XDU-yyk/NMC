@@ -421,13 +421,18 @@ void WebServerManager::fillSimData(TelemetryData& data)
     data.batteryVoltage = 11.4f - 0.02f * (t / 60.0f);
     data.batteryCells   = 3;
 
-    // GPS — 显示固定坐标（模拟已定位）
-    data.gpsValid = true;
-    data.gpsSats  = 8 + (int)(sinf(t * 0.1f) * 2);
-    data.gpsLat   = 39.9042;
-    data.gpsLng   = 116.4074;
-    data.gpsAlt   = 50.0f;
-    data.gpsSpeed = 0.5f + 0.3f * sinf(t * 0.1f);
+    // GPS — 默认 offline/no fix
+    data.gpsValid = false;
+    data.gpsSats  = 0;
+    data.gpsLat   = 0;
+    data.gpsLng   = 0;
+    data.gpsAlt   = 0;
+    data.gpsSpeed = 0;
+    data.gpsOnline = false;
+    data.gpsAgeMs = 0;
+    data.gpsChars = 0;
+    data.gpsSentences = 0;
+    data.gpsFailedChecksum = 0;
 
     // 飞控 — 默认离线
     data.fcOnline    = false;
@@ -487,6 +492,10 @@ void WebServerManager::buildTelemetryJson(JsonDocument& doc)
     doc["gpsLng"]   = data.gpsLng;
     doc["gpsAlt"]   = data.gpsAlt;
     doc["gpsSpeed"] = data.gpsSpeed;
+    doc["gpsAgeMs"] = data.gpsAgeMs;
+    doc["gpsChars"] = data.gpsChars;
+    doc["gpsSentences"] = data.gpsSentences;
+    doc["gpsFailedChecksum"] = data.gpsFailedChecksum;
 
     // 飞控
     doc["fcOnline"]   = data.fcOnline;

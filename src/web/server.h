@@ -46,6 +46,10 @@ struct TelemetryData {
     int    gpsSats = 0;
     double gpsLat = 0, gpsLng = 0;
     float  gpsAlt = 0, gpsSpeed = 0;
+    uint32_t gpsAgeMs = 0;
+    uint32_t gpsChars = 0;
+    uint32_t gpsSentences = 0;
+    uint32_t gpsFailedChecksum = 0;
     // 飞控
     bool   fcOnline = false;
     bool   armed = false;
