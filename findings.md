@@ -350,3 +350,36 @@
 - Can `Error -1` / `Error 263` be fully eliminated:
   - software can reduce impact and frequency, but cannot guarantee zero on a marginal I2C physical layer;
   - true elimination requires hardware cleanup: shorter SDA/SCL wires, stronger/known pull-ups, stable 3.3V with local decoupling, common ground, less noise, or a better VL53L1X module.
+
+## 2026-06-30 F4V3S UART6 MSP Probe
+
+- Hardware constraint: final FC link must use F4V3S `R6/T6` (UART6), mapped to ESP32-S3 `GPIO16/17`.
+- Important protocol correction:
+  - MSP is request/response; the flight controller normally does not stream MSP frames from `T6` unless something sends a valid `$M>` request into `R6`.
+  - Therefore, "USB-TTL only listens to T6 and sees nothing" does not prove UART6 is dead.
+- Code audit found an actual workspace inconsistency:
+  - `src/fc_diag_main.cpp` printed `diag.rxBytes`, but `src/comm/msp.h` had the `rxBytes` declaration stuck onto a mojibake comment line, effectively commented out.
+  - Rewrote `src/comm/msp.h` and `src/comm/msp.cpp` as clean ASCII while preserving the existing MSP public interface.
+- MSP diagnostic improvements now include:
+  - `txFrames`, `txBytes`;
+  - `rxBytes`, `rxDollarCount`, `rxHeaderCount`, `lastRxByte`;
+  - per-request error classification using RX counters before/after the request rather than stale cumulative booleans.
+- Added `src/fc_uart_probe_main.cpp` and PlatformIO env `esp32-s3-fc-uart-probe`.
+- Probe firmware sends read-only MSP v1 request frames and dumps raw RX bytes:
+  - `FC_VERSION`: `24 4D 3E 00 01 01`;
+  - `STATUS`: `24 4D 3E 00 65 65`;
+  - `ATTITUDE`: `24 4D 3E 00 6C 6C`;
+  - `ALTITUDE`: `24 4D 3E 00 6D 6D`;
+  - `ANALOG`: `24 4D 3E 00 6E 6E`;
+  - `RC`: `24 4D 3E 00 69 69`.
+- Build verification passed:
+  - `esp32-s3-fc-diag`;
+  - `esp32-s3-fc-uart-probe`.
+- Uploaded `esp32-s3-fc-uart-probe` to ESP32 on `COM55`.
+- Live COM55 sample after upload:
+  - ESP32 repeatedly prints valid MSP request bytes, for example `tx=24 4D 3E 00 65 65`;
+  - RX was still `<none>` in the short local sample.
+- Interpretation:
+  - ESP32 firmware is now definitely transmitting valid MSP v1 requests on Serial2 `TX=GPIO16`;
+  - if the wiring is `GPIO16 -> F4 R6`, then the remaining failure is between ESP32 TX and FC UART6 MSP handling, or FC `T6` response path;
+  - next physical test should verify that `R6` sees the exact request bytes and that `T6` responds with `$M<...`, not just passive listening on `T6`.

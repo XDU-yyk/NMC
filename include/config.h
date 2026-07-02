@@ -49,7 +49,11 @@
  *       标注 [#] 的引脚在多外设同时使用时需特别注意。
  * ================================================================ */
 
-/* ── F4V3S PLUS 飞控通信 (MSP 协议, UART2) ── */
+/* ── F4V3S PLUS 飞控通信 (MSP 协议, UART2, ESP32 GPIO 16/17) ── */
+/* 飞控端: 使用 UART6 端口 (TX6 / RX6, 2.54mm 焊盘)          */
+/* 接线:    F4V3S TX6 → ESP32 GPIO 17 (RX)                   */
+/*          F4V3S RX6 → ESP32 GPIO 16 (TX)                   */
+/*          F4V3S GND → ESP32 GND                            */
 #define FC_UART_NUM         2
 #define FC_RX_PIN           17
 #define FC_TX_PIN           16
@@ -83,15 +87,15 @@
 // ESP32-S3 标准相机引脚配置
 #define CAM_PIN_PWDN        -1      // 未使用
 #define CAM_PIN_RESET       -1      // 未使用 (或接 GPIO -1 表示软复位)
-#define CAM_PIN_XCLK        15
-#define CAM_PIN_SIOD        33      // SCCB SDA
-#define CAM_PIN_SIOC        34      // SCCB SCL
+#define CAM_PIN_XCLK        -1      // 模块自带晶振，不接
+#define CAM_PIN_SIOD        1       // SCCB SDA
+#define CAM_PIN_SIOC        2       // SCCB SCL
 #define CAM_PIN_Y9          39      // D7
 #define CAM_PIN_Y8          41      // D6
 #define CAM_PIN_Y7          42      // D5
 #define CAM_PIN_Y6          12      // D4
 #define CAM_PIN_Y5          11      // D3
-#define CAM_PIN_Y4          10      // D2
+#define CAM_PIN_Y4          14      // D2
 #define CAM_PIN_Y3          9       // D1
 #define CAM_PIN_Y2          8       // D0
 #define CAM_PIN_VSYNC       6

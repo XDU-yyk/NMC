@@ -13,7 +13,7 @@ void FCBridge::begin() {
 
     // 初始化 MSP 协议层，连接飞控 UART
     HardwareSerial* fcSerial = &Serial2;  // FC_UART_NUM = 2
-    m_msp.begin(*fcSerial, FC_BAUD);
+    m_msp.begin(*fcSerial, FC_BAUD, FC_RX_PIN, FC_TX_PIN);
 
     LOG(LOG_TAG_FC, "FC Bridge init — UART%d @ %d baud", FC_UART_NUM, FC_BAUD);
 
@@ -72,7 +72,7 @@ void FCBridge::setOutput(const FCOutput& out) {
 }
 
 bool FCBridge::isOnline() const {
-    return (millis() - m_state.lastUpdate) < FC_MSP_TIMEOUT_MS * 3;
+    return m_state.valid && (millis() - m_state.lastUpdate) < FC_MSP_TIMEOUT_MS * 5;
 }
 
 bool FCBridge::arm() {
@@ -95,6 +95,7 @@ void FCBridge::pollAttitude() {
         m_state.roll   = r;
         m_state.pitch  = p;
         m_state.yaw    = y;
+        m_state.valid = true;
         m_state.lastUpdate = millis();
     }
 }
@@ -104,17 +105,23 @@ void FCBridge::pollAltitude() {
     if (m_msp.readAltitude(alt, vario)) {
         m_state.altitude = alt;
         m_state.vario    = vario;
+        m_state.valid = true;
+        m_state.lastUpdate = millis();
     }
 }
 
 void FCBridge::pollBattery() {
     if (m_msp.readBattery(m_state.batteryCells, m_state.batteryVoltage)) {
-        // OK
+        m_state.valid = true;
+        m_state.lastUpdate = millis();
     }
 }
 
 void FCBridge::pollRC() {
-    m_msp.readRC(m_state.rcChannels, m_state.rcChannelCount);
+    if (m_msp.readRC(m_state.rcChannels, m_state.rcChannelCount)) {
+        m_state.valid = true;
+        m_state.lastUpdate = millis();
+    }
 }
 
 void FCBridge::pollStatus() {
@@ -123,5 +130,7 @@ void FCBridge::pollStatus() {
     if (m_msp.readStatus(ct, af)) {
         m_state.cycleTime = ct;
         m_state.armed     = (af & 0x01);
+        m_state.valid = true;
+        m_state.lastUpdate = millis();
     }
 }

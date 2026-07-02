@@ -185,3 +185,30 @@
   - `findings.md` records why most lines are merged while some split at USB/serial packet boundaries;
   - `findings.md` and `task_plan.md` record that residual `Error -1` / `Error 263` is tolerated as transient I2C read failure after XSHUT, with ToF staying initialized and valid;
   - no firmware change is required unless the user wants shorter cosmetic log lines or performs hardware cleanup to reduce I2C errors further.
+- 2026-06-30 FC UART6/MSP handoff:
+  - user reported DeepSeek diagnosis claiming UART6 had no output after passive T6 USB-TTL listening;
+  - corrected the diagnostic assumption: MSP is request/response, so T6 is expected to stay quiet until R6 receives a valid `$M>` request.
+- Rewrote `src/comm/msp.h` and `src/comm/msp.cpp` in clean ASCII:
+  - fixed the broken `MSPDiag::rxBytes` declaration that was stuck behind a mojibake comment;
+  - kept the public MSP API used by `FCBridge`;
+  - added reliable TX/RX counters, header counters, last RX byte, and per-request error classification.
+- Updated `src/comm/fc_bridge.cpp`:
+  - `isOnline()` now requires `m_state.valid`;
+  - every successful read updates `valid` and `lastUpdate`, not only attitude/status.
+- Updated `src/fc_diag_main.cpp` diagnostic prints to use numeric `$`/`$M` counters and `lastRx`.
+- Added `src/fc_uart_probe_main.cpp` and `esp32-s3-fc-uart-probe`:
+  - sends read-only MSP request bytes on ESP32 Serial2;
+  - dumps raw bytes returned by the flight controller.
+- Build results:
+  - first parallel PlatformIO build failed due to `.pio/build` cleanup race and user-level `.platformio` lock permissions;
+  - removed `D:\Code\NMC\.pio\build` after confirming it was inside the workspace;
+  - rebuilt sequentially with elevated access;
+  - `esp32-s3-fc-diag` succeeded;
+  - `esp32-s3-fc-uart-probe` succeeded.
+- Uploaded `esp32-s3-fc-uart-probe` to `COM55`.
+- Short serial sample from COM55:
+  - ESP32 is transmitting standard MSP request frames such as `24 4D 3E 00 65 65`;
+  - short sample still showed `rx=<none>`.
+- Current next test:
+  - use USB-TTL or serial assistant to confirm the F4 `R6` pad receives those request bytes;
+  - only after sending a request into `R6`, check whether `T6` replies with bytes starting `24 4D 3C`.

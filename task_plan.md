@@ -83,3 +83,21 @@ Goal: eliminate or clearly root-cause intermittent ESP32 Wire errors while readi
 - ToF init now requires stable repeated ACKs, retries model-ID reads, and attempts a guarded `SOFT_RESET` before giving up.
 - Standalone scanner now prints idle SDA/SCL levels, repeated `0x29` ACK statistics, repeated model-ID reads, and soft-reset write result.
 - `TOF_XSHUT_PIN` is now GPIO10 for real sensor-side reset. This is acceptable for Web MVP, but it conflicts with `CAM_PIN_Y4` if the OV2640 parallel camera is enabled later.
+
+## Flight Controller UART6/MSP Diagnostic Status
+
+- Rewrote MSP diagnostic layer in `src/comm/msp.h` and `src/comm/msp.cpp`.
+- Added `src/fc_uart_probe_main.cpp`.
+- Added PlatformIO env `esp32-s3-fc-uart-probe`.
+- Verified builds:
+  - `esp32-s3-fc-diag`: pass;
+  - `esp32-s3-fc-uart-probe`: pass.
+- Uploaded `esp32-s3-fc-uart-probe` to ESP32 on `COM55`.
+- Current evidence:
+  - ESP32 sends valid MSP v1 request frames on `GPIO16/TX`, for example `24 4D 3E 00 65 65`;
+  - short serial sample still has `rx=<none>`.
+- Next acceptance check:
+  - F4 `R6` must see the exact request bytes;
+  - after a request reaches `R6`, F4 `T6` should reply with frames beginning `24 4D 3C`;
+  - if `R6` sees requests but `T6` never replies, focus on Betaflight UART6 MSP config/resource/firmware;
+  - if `R6` does not see requests, focus on ESP32 GPIO16 to F4 R6 wiring/common ground.
