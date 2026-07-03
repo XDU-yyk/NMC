@@ -383,3 +383,16 @@
   - ESP32 firmware is now definitely transmitting valid MSP v1 requests on Serial2 `TX=GPIO16`;
   - if the wiring is `GPIO16 -> F4 R6`, then the remaining failure is between ESP32 TX and FC UART6 MSP handling, or FC `T6` response path;
   - next physical test should verify that `R6` sees the exact request bytes and that `T6` responds with `$M<...`, not just passive listening on `T6`.
+
+## 2026-07-03 UART3 MSP Migration Finding
+
+- The F4V3S PLUS scanned manual identifies the upper R6/T6 pads as a CRSF receiver interface.
+- The same manual says to turn on UART6 as Serial RX, not as the preferred MSP peripheral.
+- The bottom connector area identifies GPS as UART1 and indicates UART3 for MSP/compass-related setup.
+- User verified USB-TTL loopback: `24 4D 3C 00 01 01` is transmitted and received correctly when TX/RX are shorted.
+- User verified R6/T6 does not reply to ASCII `#` and does not reply to MSP request bytes.
+- Current conclusion: move MSP telemetry to UART3 R3/T3. Leave UART6 R6/T6 for receiver Serial RX/CRSF or unused bench state.
+- Current project correction supersedes earlier notes that showed `$M>` as the request direction. Correct MSP v1 bring-up expectation is:
+  - request to FC: `$M<`, example `24 4D 3C 00 01 01`;
+  - reply from FC: `$M>`, expected prefix `24 4D 3E`.
+- Handoff workflow for DeepSeek is now in `fc_uart3_msp_workflow.md`.

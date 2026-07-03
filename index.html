@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>NMC 智能无人机伞 — ESP32-S3 传感演示平台</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0a0e17;color:#e2e8f0;padding:20px;max-width:960px;margin:0 auto}
+h1{font-size:1.6rem;display:flex;align-items:center;gap:10px;margin-bottom:4px}
+.subtitle{color:#94a3b8;font-size:.9rem;margin-bottom:24px}
+.badge{display:inline-block;padding:2px 10px;border-radius:100px;font-size:.75rem;font-weight:600}
+.badge-red{background:#991b1b;color:#fca5a5}
+.badge-green{background:#064e3b;color:#6ee7b7}
+.badge-amber{background:#7c2d12;color:#fdba74}
+.badge-blue{background:#1e3a5f;color:#93c5fd}
+.badge-slate{background:#334155;color:#cbd5e1}
+.card{background:#111827;border:1px solid #1e293b;border-radius:12px;padding:16px;margin-bottom:12px}
+.card h3{font-size:.85rem;color:#94a3b8;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px}
+.stat{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b;font-size:.9rem}
+.stat:last-child{border-bottom:none}
+.stat-label{color:#94a3b8}
+.stat-value{font-weight:600;font-family:monospace}
+.stat-value.red{color:#f87171}
+.stat-value.green{color:#4ade80}
+.warning-banner{background:#451a03;border:1px solid #78350f;border-radius:12px;padding:14px 16px;margin-bottom:12px;font-size:.9rem;color:#fdba74}
+.warning-banner strong{color:#fbbf24}
+.status-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+.status-dot.green{background:#22c55e}
+.status-dot.red{background:#ef4444}
+.status-dot.amber{background:#f59e0b}
+footer{margin-top:24px;text-align:center;color:#475569;font-size:.8rem}
+a{color:#60a5fa}
+</style>
+</head>
+<body>
+
+<div class="warning-banner">
+  <strong>⚠ 当前状态：飞行控制器已损坏</strong><br>
+  暂停所有飞行、电机测试、解锁和自主控制开发。当前仅展示 ESP32-S3 传感器读取与 Web 交互能力。
+</div>
+
+<h1>🛸 NMC 智能无人机伞</h1>
+<p class="subtitle">ESP32-S3 伴随传感与 Web 演示平台 · 近距离辅助跟随与态势感知原型</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>📡 系统状态</h3>
+    <div class="stat"><span class="stat-label">运行时间</span><span class="stat-value" id="uptime">00:00:00</span></div>
+    <div class="stat"><span class="stat-label">堆内存</span><span class="stat-value" id="heap">0</span></div>
+    <div class="stat"><span class="stat-label">WiFi 客户端</span><span class="stat-value" id="stations">0</span></div>
+    <div class="stat"><span class="stat-label">芯片温度</span><span class="stat-value" id="chipTemp">--</span></div>
+    <div class="stat"><span class="stat-label">飞控</span><span class="stat-value red">⛔ 离线（已损坏）</span></div>
+  </div>
+  <div class="card">
+    <h3>📷 摄像头</h3>
+    <div class="stat"><span class="stat-label">状态</span><span class="stat-value" id="camStatus">--</span></div>
+    <p style="margin-top:8px;font-size:.85rem;color:#94a3b8">
+      摄像头预览为独立固件（AP: NMC-Camera，IP: 192.168.4.1）<br>
+      约 5 FPS / 0.5-1s 延迟，仅用于调试显示
+    </p>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>📏 VL53L1X ToF 激光测距</h3>
+    <div class="stat"><span class="stat-label">初始化</span><span class="stat-value" id="tofInit">--</span></div>
+    <div class="stat"><span class="stat-label">有效数据</span><span class="stat-value" id="tofValid">--</span></div>
+    <div class="stat"><span class="stat-label">距离</span><span class="stat-value" id="tofDist">-- mm</span></div>
+    <div class="stat"><span class="stat-label">状态码</span><span class="stat-value" id="tofStatus">--</span></div>
+    <div class="stat"><span class="stat-label">错误计数</span><span class="stat-value" id="tofErrors">--</span></div>
+    <div class="stat"><span class="stat-label">有效/失败/恢复</span><span class="stat-value" id="tofCounters">--</span></div>
+    <div class="stat"><span class="stat-label">最后故障</span><span class="stat-value" id="tofFault">--</span></div>
+  </div>
+  <div class="card">
+    <h3>🛰 GPS NEO-M8N</h3>
+    <div class="stat"><span class="stat-label">在线</span><span class="stat-value" id="gpsOnline">--</span></div>
+    <div class="stat"><span class="stat-label">定位有效</span><span class="stat-value" id="gpsValid">--</span></div>
+    <div class="stat"><span class="stat-label">卫星数</span><span class="stat-value" id="gpsSats">--</span></div>
+    <div class="stat"><span class="stat-label">HDOP</span><span class="stat-value" id="gpsHdop">--</span></div>
+    <div class="stat"><span class="stat-label">纬度</span><span class="stat-value" id="gpsLat">--</span></div>
+    <div class="stat"><span class="stat-label">经度</span><span class="stat-value" id="gpsLng">--</span></div>
+    <div class="stat"><span class="stat-label">海拔</span><span class="stat-value" id="gpsAlt">-- m</span></div>
+    <div class="stat"><span class="stat-label">速度</span><span class="stat-value" id="gpsSpeed">-- m/s</span></div>
+    <div class="stat"><span class="stat-label">校验通过/失败</span><span class="stat-value" id="gpsChecksums">--</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <h3>⚙ 参数调节</h3>
+  <div class="stat"><span class="stat-label">Web 推送频率</span><span class="stat-value" id="paramPoll">-- Hz</span></div>
+  <p style="margin-top:8px;font-size:.85rem;color:#94a3b8">
+    参数调节通过 <code>POST /api/params</code> 进行，已做白名单和范围校验。<br>
+    当前仅展示只读诊断面板，不启用控制输出。
+  </p>
+</div>
+
+<div class="card">
+  <h3>🏗 架构说明</h3>
+  <p style="font-size:.88rem;line-height:1.7;color:#cbd5e1">
+    <strong>原始架构：</strong>ESP32-S3（协处理器）+ F4V3S PLUS（飞控）<br>
+    F4V3S 负责姿态稳定、电机/电调输出、解锁、失控保护和遥控器接管。<br>
+    ESP32-S3 负责传感器读取、Web UI、摄像头预览、日志记录和（未来）有限辅助指令。<br><br>
+    <strong>当前状态：</strong>飞控已损坏，飞控集成暂停。待替换硬件后，通过 UART3 (R3/T3) 恢复 MSP 通信。<br>
+    <strong>恢复路线：</strong>USB-TTL 验证 UART3 → ESP32 UART 探头 → 只读 MSP 诊断 → FC 数据集成 → 安全门槛验证
+  </p>
+</div>
+
+<footer>
+  <p>NMC Smart Umbrella — 嵌入式竞赛 · v2.0.0-nmc</p>
+  <p style="margin-top:4px">WebSocket: ws://192.168.4.1:81 · JSON API: <a href="/api/telemetry">/api/telemetry</a></p>
+</footer>
+
+<script>
+(function() {
+  let ws = null;
+  let reconnectTimer = null;
+
+  function connectWs() {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    try {
+      ws = new WebSocket('ws://' + location.hostname + ':81');
+      ws.onopen = () => { console.log('[WS] connected'); };
+      ws.onclose = () => {
+        console.log('[WS] disconnected, retry in 3s');
+        ws = null;
+        reconnectTimer = setTimeout(connectWs, 3000);
+      };
+      ws.onmessage = (e) => {
+        try { updateDashboard(JSON.parse(e.data)); } catch(x) {}
+      };
+    } catch(e) {
+      reconnectTimer = setTimeout(connectWs, 5000);
+    }
+  }
+
+  function fetchTelemetry() {
+    fetch('/api/telemetry')
+      .then(r => r.json())
+      .then(d => updateDashboard(d))
+      .catch(() => {});
+  }
+
+  function updateDashboard(d) {
+    // System
+    if (d.uptime != null) {
+      const s = Math.floor(d.uptime / 1000);
+      const h = String(Math.floor(s / 3600)).padStart(2,'0');
+      const m = String(Math.floor((s % 3600) / 60)).padStart(2,'0');
+      const sec = String(s % 60).padStart(2,'0');
+      document.getElementById('uptime').textContent = h+':'+m+':'+sec;
+    }
+    if (d.freeHeap != null) document.getElementById('heap').textContent = (d.freeHeap / 1024).toFixed(0) + ' KB';
+    if (d.stations != null) document.getElementById('stations').textContent = d.stations;
+    if (d.chipTemp != null) document.getElementById('chipTemp').textContent = d.chipTemp.toFixed(1) + ' °C';
+
+    // FC
+    const fcEl = document.querySelector('.card h3:first-child + div .stat:last-child .stat-value');
+    if (fcEl) fcEl.innerHTML = '⛔ 离线（已损坏）';
+
+    // Camera
+    document.getElementById('camStatus').textContent = '独立固件模式';
+
+    // ToF
+    if (d.tofOnline != null) {
+      document.getElementById('tofInit').textContent = d.tofOnline ? '✅ 是' : '❌ 否';
+      document.getElementById('tofInit').className = 'stat-value ' + (d.tofOnline ? 'green' : 'red');
+    }
+    document.getElementById('tofValid').textContent = d.tofValid != null ? (d.tofValid ? '✅ 是' : '❌ 否') : '--';
+    document.getElementById('tofDist').textContent = d.tofDistance != null ? d.tofDistance.toFixed(0) + ' mm' : '--';
+    document.getElementById('tofStatus').textContent = d.tofStatus ?? '--';
+    document.getElementById('tofErrors').textContent = d.tofErrors ?? '--';
+
+    // GPS
+    if (d.gpsOnline != null) {
+      document.getElementById('gpsOnline').textContent = d.gpsOnline ? '✅ 是' : '❌ 否';
+      document.getElementById('gpsOnline').className = 'stat-value ' + (d.gpsOnline ? 'green' : '');
+    }
+    if (d.gpsValid != null) {
+      document.getElementById('gpsValid').textContent = d.gpsValid ? '✅ 是' : '❌ 否';
+      document.getElementById('gpsValid').className = 'stat-value ' + (d.gpsValid ? 'green' : '');
+    }
+    document.getElementById('gpsSats').textContent = d.gpsSats ?? '--';
+    document.getElementById('gpsHdop').textContent = d.gpsHdop ?? '--';
+    document.getElementById('gpsLat').textContent = d.gpsLat ? d.gpsLat.toFixed(6) + '°' : '--';
+    document.getElementById('gpsLng').textContent = d.gpsLng ? d.gpsLng.toFixed(6) + '°' : '--';
+    document.getElementById('gpsAlt').textContent = d.gpsAlt != null ? d.gpsAlt.toFixed(1) + ' m' : '--';
+    document.getElementById('gpsSpeed').textContent = d.gpsSpeed != null ? d.gpsSpeed.toFixed(1) + ' m/s' : '--';
+  }
+
+  // Poll REST as primary (reliable), WS as bonus
+  const pollInterval = setInterval(fetchTelemetry, 1000);
+  fetchTelemetry();
+  setTimeout(connectWs, 500);
+})();
+</script>
+</body>
+</html>

@@ -16,6 +16,14 @@ This repository is for an embedded competition drone umbrella prototype. Future 
 - Challenge target: short outdoor low-speed following only in open space, low wind, and with immediate RC takeover.
 - Do not make high-precision autonomous human following a required acceptance item unless new tracking hardware or reliable vision code exists.
 
+## Current Fallback Status
+
+- As of 2026-07-03, the user reports the F4V3S PLUS flight controller is damaged.
+- Until replacement or working FC hardware is available, use `no_fc_fallback_workflow.md` as the active route.
+- The fallback deliverable is ESP32-S3 Web/sensor demo, independent camera preview, evidence package, and honest documentation downgrade.
+- Do not attempt flight, motor tests, arming, RC override, MSP writes, or UART3 MSP proof on the damaged FC.
+- Keep `fc_uart3_msp_workflow.md` only as the replacement-FC recovery workflow.
+
 ## Sensor And Hardware Limits
 
 - GPS plus one forward VL53L1X ToF cannot reliably identify a person or infer lateral position in complex environments.
@@ -41,6 +49,8 @@ This repository is for an embedded competition drone umbrella prototype. Future 
 ## Multi-Agent Collaboration
 
 - The user may collaborate with DeepSeek on this project. Ask DeepSeek to read `AGENTS.md`, `workflow.md`, and `plan.md` before editing anything.
-- DeepSeek should begin from the grounded MVP: RC-safe manual flight, Web telemetry/status, parameter tuning, and desktop or tethered assist validation.
+- For the current damaged-FC fallback, ask DeepSeek to also read `PROJECT_HANDOFF_2026-07-03.md` and `no_fc_fallback_workflow.md`.
+- When a working FC is available, DeepSeek should begin from the grounded MVP: RC-safe manual flight, Web telemetry/status, parameter tuning, and desktop or tethered assist validation.
+- While the FC is damaged, DeepSeek should begin from the no-FC fallback instead: ESP32-S3 Web/sensor demo, independent camera preview, evidence package, and documentation downgrade.
 - DeepSeek should not implement or document high-precision autonomous human following, UWB capability, or complex outdoor autonomy unless the hardware and tests actually support it.
 - For each task, DeepSeek should state the target file(s), keep changes scoped, preserve the safety gates, and report any assumptions or unverified hardware facts.

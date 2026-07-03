@@ -212,3 +212,16 @@
 - Current next test:
   - use USB-TTL or serial assistant to confirm the F4 `R6` pad receives those request bytes;
   - only after sending a request into `R6`, check whether `T6` replies with bytes starting `24 4D 3C`.
+
+- 2026-07-03 UART3 migration handoff:
+  - reviewed the F4V3S PLUS scanned manual and the latest bench evidence;
+  - concluded R6/T6 is the receiver/Serial RX interface and should not be used for MSP;
+  - selected UART3 R3/T3 as the MSP telemetry link;
+  - created `fc_uart3_msp_workflow.md` with hardware wiring, Betaflight CLI commands, USB-TTL proof, ESP32 probe, fc-diag validation, Web MVP integration gates, and a DeepSeek prompt;
+  - updated `task_plan.md` and `findings.md` with the UART3 migration plan and corrected MSP direction expectation.
+  - marked the old UART6 MSP plan as superseded to avoid future DeepSeek/Codex confusion.
+
+- 2026-07-03 new-chat handoff summary:
+  - created `PROJECT_HANDOFF_2026-07-03.md`;
+  - summarized architecture rules, completed Web/ToF/GPS/camera/MSP diagnostic work, current UART3 decision, remaining work, no-go items, caveats, and a new-conversation prompt;
+  - emphasized that UART6 R6/T6 MSP is superseded and UART3 R3/T3 must be proven first with USB-TTL.

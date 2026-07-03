@@ -31,6 +31,9 @@ void setup()
     // FC Bridge 内部会初始化 MSP + Serial2
     Serial.printf("FC UART: Serial2 @ %d baud, RX=%d TX=%d\n",
         FC_BAUD, FC_RX_PIN, FC_TX_PIN);
+    Serial.println("  F4V3S T3/TX3 -> ESP32 GPIO17 (RX)");
+    Serial.println("  F4V3S R3/RX3 -> ESP32 GPIO16 (TX)");
+    Serial.println("  UART6 R6/T6 reserved for CRSF receiver");
 
     fcBridge.begin();
 

@@ -50,10 +50,11 @@
  * ================================================================ */
 
 /* ── F4V3S PLUS 飞控通信 (MSP 协议, UART2, ESP32 GPIO 16/17) ── */
-/* 飞控端: 使用 UART6 端口 (TX6 / RX6, 2.54mm 焊盘)          */
-/* 接线:    F4V3S TX6 → ESP32 GPIO 17 (RX)                   */
-/*          F4V3S RX6 → ESP32 GPIO 16 (TX)                   */
-/*          F4V3S GND → ESP32 GND                            */
+/* 飞控端: 使用 UART3 端口 (R3 / T3, 2.0mm 焊盘)               */
+/* 接线:    F4V3S T3/TX3 → ESP32 GPIO 17 (RX)                  */
+/*          F4V3S R3/RX3 → ESP32 GPIO 16 (TX)                  */
+/*          F4V3S GND    → ESP32 GND                           */
+/* 注意: R6/T6 是 CRSF 接收机接口，不做 MSP。UART3 才是 MSP。    */
 #define FC_UART_NUM         2
 #define FC_RX_PIN           17
 #define FC_TX_PIN           16
@@ -67,14 +68,18 @@
 #define GPS_BAUD            9600
 
 /* ── VL53L1X ToF 激光测距 (I2C Wire) ── */
+/* 引脚 GPIO4/5 不与摄像头 DVP 总线冲突，两个固件可共用接线。 */
+/* 注意：原 GPIO4/5 曾预留为 UWB SPI SCK/MISO，UWB 无实物故让出。 */
 #define TOF_I2C_PORT        Wire1
-#define TOF_SDA             41
-#define TOF_SCL             42
+#define TOF_SDA             4
+#define TOF_SCL             5
 #define TOF_I2C_FREQ        10000
 #define TOF_TIMING_BUDGET_MS 100    // conservative bench diagnostic budget
-#define TOF_XSHUT_PIN       10      // VL53L1X XSHUT; conflicts with camera D2 if OV2640 is enabled later
+#define TOF_XSHUT_PIN       10      // VL53L1X XSHUT, safe
 
-/* ── UWB DW3000 (SPI2) ── */
+/* ── UWB DW3000 (SPI2) [保留/未来扩展] ── */
+/* 注意：UWB 不是当前硬件。以下引脚定义为未来扩展预留，
+   在 UWB 模块实际购买、接线和测试之前不会启用。        */
 #define UWB_SPI_HOST        SPI2_HOST
 #define UWB_SCK             4
 #define UWB_MISO            5
@@ -85,6 +90,8 @@
 
 /* ── OV2640 摄像头 (DVP 8-bit 并行接口 + SCCB) ── */
 // ESP32-S3 标准相机引脚配置
+// 注意: Y8/D6(GPIO41) 和 Y5/D5(GPIO42) 仍用原引脚，不再与 ToF I2C 冲突
+// ToF 已改为 GPIO4(SDA)/GPIO5(SCL)，两者可在不同固件中独立运行
 #define CAM_PIN_PWDN        -1      // 未使用
 #define CAM_PIN_RESET       -1      // 未使用 (或接 GPIO -1 表示软复位)
 #define CAM_PIN_XCLK        -1      // 模块自带晶振，不接

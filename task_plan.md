@@ -86,6 +86,7 @@ Goal: eliminate or clearly root-cause intermittent ESP32 Wire errors while readi
 
 ## Flight Controller UART6/MSP Diagnostic Status
 
+- Superseded on 2026-07-03: do not continue using UART6 R6/T6 for MSP. The F4V3S PLUS manual identifies R6/T6 as the receiver/Serial RX interface. Use the UART3 MSP migration plan below instead.
 - Rewrote MSP diagnostic layer in `src/comm/msp.h` and `src/comm/msp.cpp`.
 - Added `src/fc_uart_probe_main.cpp`.
 - Added PlatformIO env `esp32-s3-fc-uart-probe`.
@@ -93,11 +94,33 @@ Goal: eliminate or clearly root-cause intermittent ESP32 Wire errors while readi
   - `esp32-s3-fc-diag`: pass;
   - `esp32-s3-fc-uart-probe`: pass.
 - Uploaded `esp32-s3-fc-uart-probe` to ESP32 on `COM55`.
-- Current evidence:
-  - ESP32 sends valid MSP v1 request frames on `GPIO16/TX`, for example `24 4D 3E 00 65 65`;
-  - short serial sample still has `rx=<none>`.
+- Historical evidence:
+  - early UART6 probe samples did not receive valid replies;
+  - USB-TTL and ESP32-side tests later showed R6/T6 is not a viable MSP path on this board.
+- Correct MSP direction for all future tests:
+  - request to FC: `$M<`, example `24 4D 3C 00 01 01`;
+  - reply from FC: `$M>`, expected prefix `24 4D 3E`.
 - Next acceptance check:
-  - F4 `R6` must see the exact request bytes;
-  - after a request reaches `R6`, F4 `T6` should reply with frames beginning `24 4D 3C`;
-  - if `R6` sees requests but `T6` never replies, focus on Betaflight UART6 MSP config/resource/firmware;
-  - if `R6` does not see requests, focus on ESP32 GPIO16 to F4 R6 wiring/common ground.
+  - run the UART3 plan below, starting with USB-TTL proof on R3/T3.
+
+## UART3 MSP Migration Plan
+
+Goal: move the flight-controller MSP telemetry link away from UART6 R6/T6 and onto UART3 R3/T3, because the F4V3S PLUS manual identifies the upper R6/T6 pads as the receiver/Serial RX interface.
+
+Status:
+
+- [x] Determine from manual and bench evidence that R6/T6 should not be used for MSP.
+- [x] Define UART3 wiring and Betaflight CLI workflow.
+- [x] Create DeepSeek handoff workflow in `fc_uart3_msp_workflow.md`.
+- [ ] USB-TTL proof on UART3: `#` enters CLI and `24 4D 3C 00 01 01` receives `24 4D 3E ...`.
+- [ ] Update project comments/diagnostic banners from UART6/R6/T6 to UART3/R3/T3.
+- [ ] Build/upload `esp32-s3-fc-uart-probe` and verify `rx=24 4D 3E ...`.
+- [ ] Build/upload `esp32-s3-fc-diag` and verify `[FC] online=1`.
+- [ ] Only after the diagnostic link is stable, integrate read-only FC telemetry into Web MVP.
+
+Success criteria:
+
+- UART3 MSP is proven first with USB-TTL, then with ESP32.
+- MSP request direction remains `$M<`; FC reply direction remains `$M>`.
+- No ESP32 motor/arming/control-write functions are enabled during bring-up.
+- UART6 is reserved for receiver use or left unused during bench testing.
