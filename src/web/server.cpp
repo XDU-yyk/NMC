@@ -13,6 +13,14 @@ WebServerManager webServer;
 WebServerManager* g_webServerInstance = nullptr;
 TunableParams g_params;
 
+#ifdef ENABLE_CAMERA
+extern uint8_t* getCamBuf();
+extern size_t   getCamLen();
+extern bool     getCamValid();
+extern uint32_t getCamFrames();
+extern uint32_t getCamErrors();
+#endif
+
 static const IPAddress AP_IP(192, 168, 4, 1);
 static const IPAddress AP_GATEWAY(192, 168, 4, 1);
 static const IPAddress AP_SUBNET(255, 255, 255, 0);
@@ -224,6 +232,44 @@ void WebServerManager::handleHttpRequest(WiFiClient& client)
             sendText(client, "bad json\n");
         }
     }
+#ifdef ENABLE_CAMERA
+    else if (requestLine.startsWith("GET /capture.jpg") || requestLine.startsWith("GET /capture.jpeg"))
+    {
+        if (!getCamValid()) {
+            sendText(client, "no frame\n");
+        } else {
+            size_t len = getCamLen();
+            client.printf("HTTP/1.0 200 OK\r\n");
+            client.printf("Content-Type: image/jpeg\r\n");
+            client.printf("Content-Length: %u\r\n", len);
+            client.printf("Cache-Control: no-store\r\n");
+            client.printf("Connection: close\r\n\r\n");
+            client.write(getCamBuf(), len);
+            client.flush();
+        }
+    }
+    else if (requestLine.startsWith("GET /stream"))
+    {
+        client.setTimeout(5000);
+        client.printf("HTTP/1.0 200 OK\r\n");
+        client.printf("Content-Type: multipart/x-mixed-replace;boundary=jpgframe\r\n");
+        client.printf("Access-Control-Allow-Origin: *\r\n");
+        client.printf("Cache-Control: no-cache\r\n");
+        client.printf("Connection: close\r\n\r\n");
+        char head[256];
+        uint32_t lastSend = 0;
+        while (client.connected()) {
+            if (millis() - lastSend < 100) { delay(5); continue; }
+            if (!getCamValid()) { delay(10); continue; }
+            lastSend = millis();
+            size_t len = getCamLen();
+            int hlen = snprintf(head, sizeof(head),
+                "\r\n--jpgframe\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", len);
+            client.write((uint8_t*)head, hlen);
+            client.write(getCamBuf(), len);
+        }
+    }
+#endif
     else
     {
         sendIndex(client);
@@ -382,6 +428,7 @@ void WebServerManager::buildTelemetryJson(JsonDocument& doc)
     // 数据源在线状态
     doc["tofOnline"]   = data.tofOnline;
     doc["gpsOnline"]   = data.gpsOnline;
+    doc["camOnline"]   = data.camOnline;
     doc["dataSource"]  = data.dataSource;
     doc["errorFlags"]  = data.errorFlags;
     doc["tofStatus"]  = data.tofStatus;

@@ -77,6 +77,16 @@ pre{background:#0f172a;border:1px solid var(--line);border-radius:8px;padding:10
 </div>
 <div class="log" id="errLog"></div>
 <div class="log" id="log">Waiting for telemetry...</div>
+<hr style="border-color:#1e293b;margin:14px 0">
+<div style="text-align:center">
+  <img id="cam" src="/capture.jpg" style="max-width:100%;border-radius:8px;display:none"
+       onerror="this.style.display='none'"
+       onload="this.style.display='inline';document.getElementById('camOff').style.display='none'">
+  <div id="camOff" style="color:#94a3b8;font-size:.85rem;padding:20px">Camera unavailable</div>
+  <div style="margin-top:6px;font-size:.78rem;color:#94a3b8">
+    <a href="/stream" target="_blank">/stream (MJPEG)</a>
+  </div>
+</div>
 <pre id="raw">(waiting)</pre>
 </div>
 <script>
@@ -123,6 +133,12 @@ function tick(){
       }
 
       $('log').textContent = 'OK ' + new Date().toLocaleTimeString();
+
+      // Camera refresh
+      var ci = document.getElementById('cam');
+      if(ci && ci.style.display !== 'none') {
+        ci.src = '/capture.jpg?_=' + Date.now();
+      }
     })
     .catch(function(e){
       $('raw').textContent = 'FETCH ERROR: ' + e.message;

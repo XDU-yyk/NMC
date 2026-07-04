@@ -124,3 +124,73 @@ Success criteria:
 - MSP request direction remains `$M<`; FC reply direction remains `$M>`.
 - No ESP32 motor/arming/control-write functions are enabled during bring-up.
 - UART6 is reserved for receiver use or left unused during bench testing.
+
+## OV5640/OV2640 Camera No-Image Bug Plan
+
+Goal: restore visible camera image on the `esp32-s3-ov5640-diag` page after the page regressed to showing only the `capture.jpg` link.
+
+Status:
+
+- [x] Inspect current camera diagnostic HTML and stream handler.
+- [x] Identify likely regression: the `<img>` element has no static `src` and depends entirely on JavaScript to assign `/stream`.
+- [x] Try direct `/stream` image source; superseded by `/capture.jpg` polling because browser MJPEG display remained fragile.
+- [x] Ensure non-stream HTTP responses close cleanly after sending.
+- [x] Add no-store/no-cache headers so the browser does not reuse the broken old page.
+- [x] Switch the root page to use `/capture.jpg` polling as the primary visible image path.
+- [x] Keep `/stream` as an optional link rather than the only visible image path.
+- [x] Build `esp32-s3-ov5640-diag`.
+- [x] Upload to `COM55`.
+- [x] Verify from current source that the page should show an image without relying on JS-only initialization.
+- [x] Verify from COM55 serial that camera firmware boots and warm-up captures a JPEG frame.
+- [x] Verify from COM55 serial that background capture continues and `err=0`.
+- [x] Fix follow-up freeze where the page was smooth for about 30s and then stopped responding.
+- [x] Replace fixed-interval image polling with one-in-flight `/capture.jpg` refresh.
+- [x] Replace per-request `String` parsing in the diagnostic HTTP handler with fixed buffers.
+- [x] Track JPEG cache capacity separately from current JPEG length to avoid repeated heap reallocations.
+- [x] Add serial/status counters for HTTP requests, JPEG requests, status requests, write timeouts, bad requests, and frame age.
+- [x] Build and upload the freeze-mitigation firmware to `COM55`.
+- [x] Capture 70s serial evidence after upload showing stable heap/cache capacity and no camera errors without a connected browser.
+- [x] Audit current PC-side network reachability without changing WiFi settings.
+- [x] Add AP startup/status diagnostics to the camera diagnostic firmware.
+- [x] Build and upload the AP-diagnostic camera firmware to `COM55`.
+- [x] Capture serial evidence that the ESP32 reports AP started at `192.168.4.1`.
+- [x] Move the camera AP from channel 6 to channel 1 for a compatibility retest.
+- [x] Rebuild/upload the channel-1 firmware and capture serial evidence that `ap=ok`.
+- [x] Repeat non-invasive Windows WLAN scan after the channel-1 upload.
+- [x] Analyze phone `/status` evidence showing AP/camera/cache are valid but `/capture.jpg` writes timed out.
+- [x] Relax the diagnostic HTTP request-line timeout and `/capture.jpg` write timeout.
+- [x] Rebuild/upload the JPEG-timeout mitigation firmware to `COM55`.
+- [x] Capture serial evidence that AP and camera still run after the JPEG-timeout mitigation.
+- [x] Remove `availableForWrite()` gating from the cached JPEG writer after phone evidence showed every JPEG request still timed out.
+- [x] Rebuild/upload the direct-write JPEG firmware to `COM55`.
+- [x] Capture serial evidence that AP and camera still run after the direct-write fix.
+- [x] Add a firmware tag to `/status` and the root HTML so stale phone/browser responses are obvious.
+- [x] Send root HTML with explicit `Content-Length` through `writeClient()` instead of one large `printf`.
+- [x] Rebuild/upload the tagged HTML firmware to `COM55`.
+- [x] Capture serial evidence that AP and camera still run after the tagged HTML firmware.
+- [x] Verify from an AP-connected client that the root page displays the camera image, not just the `capture.jpg` link.
+- [x] Analyze tagged phone `/status` evidence showing the visible image is frozen because camera capture is offline.
+- [x] Fix camera capture recovery so a failed `esp_camera_fb_get()` does not leave the page frozen on a stale cached frame.
+- [x] Rebuild/upload the camera recovery firmware to `COM55`.
+- [x] Add SCCB bus recovery before camera init for a stuck SIOD/SIOC state.
+- [x] Recheck hardware side after repeated `ESP_ERR_NOT_FOUND`; SDA/SCL idle high and subsequent serial sample shows camera frames alive again.
+- [ ] Verify from `/status` that `camera=true`, `age` stays low, and `frames` continues increasing while the phone page is open.
+- [x] Clear the SCCB detection blocker: post-hardware-check serial shows `f=873 -> 1073`, `fps=4.9`, `err=0`, `cache>0`, and low `age`.
+- [ ] AP-client/browser verification is pending: Windows can see `NMC-Camera`, but serial samples still show `sta=0 http=0 jpg=0 stat=0`.
+- [x] Phone `/status` now proves AP client and live camera backend: `stations=1`, `camera=true`, `frames=169`, `fps=5`, `errors=0`, `cache=3022`, `age=505`.
+- [x] Verify image path specifically: user confirmed `/capture.jpg?manual=1` shows a camera image and each refresh shows the live current frame.
+- [x] Final `/status?fresh=jpg1` proves JPEG delivery: `jpg=12`, `timeouts=0`, `bad=0`, `camera=true`, `frames=947`, `fps=5`, `age=179`.
+
+Success criteria:
+
+- Root page HTML includes a direct `/capture.jpg` image source.
+- JavaScript refreshes `/capture.jpg` with cache-busting timestamps; without JavaScript the first image should still load.
+- `/stream` remains available as an optional diagnostic link.
+- Build and upload both succeed.
+- Serial log shows camera PID and warm-up JPEG capture.
+- During a 60s+ no-client serial sample, `heap` and cache `cap` stay stable, `err=0`, and frame `age` does not grow.
+- During phone testing, `/status` should keep responding and `timeouts` should stay low; if the page freezes again, these fields identify whether the browser link or camera capture path stalled.
+- No flight-controller, motor, arming, RC override, or assist-output work is done.
+- Hardware/browser verification still requires opening `http://192.168.4.1/` on a device connected to `NMC-Camera`; the current PC is on `stu-xdwlan`, did not see `NMC-Camera` in repeated non-invasive WLAN scans, while ESP32 serial reports `ap=ok`.
+- Latest phone verification should first prove the current firmware by checking `fw=camdiag-20260704-html1` on the page or `"fw":"camdiag-20260704-html1"` plus increasing `seq` in `/status`.
+- Once tagged firmware is proven, frozen image means the recovery target is `camera=true` and low `age`, not HTML delivery.

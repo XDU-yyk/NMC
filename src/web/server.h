@@ -57,6 +57,7 @@ struct TelemetryData {
     // 各数据源在线状态
     bool   tofOnline = false;
     bool   gpsOnline = false;
+    bool   camOnline = false;     // 摄像头在线
     int    dataSource = 0;       // 0=sim, 1=tof, 2=gps, 3=fc, 4=mixed
     uint32_t errorFlags = 0;     // bit0=tof_err, bit1=gps_err, bit2=fc_err
     uint8_t  tofStatus = 255;    // 0=ok, 254=timeout, 255=not initialized

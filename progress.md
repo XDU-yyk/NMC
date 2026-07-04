@@ -225,3 +225,297 @@
   - created `PROJECT_HANDOFF_2026-07-03.md`;
   - summarized architecture rules, completed Web/ToF/GPS/camera/MSP diagnostic work, current UART3 decision, remaining work, no-go items, caveats, and a new-conversation prompt;
   - emphasized that UART6 R6/T6 MSP is superseded and UART3 R3/T3 must be proven first with USB-TTL.
+
+- 2026-07-03 camera no-image bug:
+  - user reported the camera page now shows only `capture.jpg` and no image;
+  - inspected `src/ov5640_diag_main.cpp`;
+  - found the root page currently emits `<img id='f'>` without a static `src`, so image startup depends entirely on JavaScript assigning `/stream`;
+  - restored a direct `<img id='f' src='/stream'>` source so the image can load even if JavaScript fails;
+  - kept JavaScript only as reconnect enhancement using ES5-compatible syntax;
+  - added `c.stop()` after non-stream HTTP responses so the browser receives a complete page/capture response;
+  - built `esp32-s3-ov5640-diag` successfully;
+  - uploaded `esp32-s3-ov5640-diag` successfully to `COM55`;
+  - source audit confirmed `/stream` is now the direct image source and stream handling still uses bounded clients plus reconnect support;
+  - attempted local PC HTTP checks for `http://192.168.4.1/` and `/capture.jpg`, but both timed out, likely because the PC is not connected to the `NMC-Camera` AP; phone/browser verification remains required.
+- 2026-07-03 camera no-image no-cache follow-up:
+  - added no-store/no-cache headers to root HTML and `capture.jpg` responses to avoid phones reusing the previous broken HTML that had no direct image source;
+  - rebuilt `esp32-s3-ov5640-diag` successfully;
+  - uploaded `esp32-s3-ov5640-diag` successfully to `COM55`;
+  - captured COM55 serial evidence after upload:
+    - firmware booted into `OV2640 Web Camera`;
+    - AP is `NMC-Camera` at `192.168.4.1`;
+    - camera PID printed as `0x0026`;
+    - warm-up captured a JPEG frame of 2579 bytes;
+    - first status line showed `err=0`;
+  - PC still cannot verify browser output unless connected to the `NMC-Camera` AP, so user should test with `http://192.168.4.1/?fresh=1`.
+- 2026-07-03 camera no-image final fallback:
+  - changed the camera page to use `/capture.jpg` polling as the primary visible image path:
+    - direct first image: `<img id='f' src='/capture.jpg?boot=1'>`;
+    - JavaScript refreshes `/capture.jpg` every 250 ms with a timestamp;
+    - `/stream` remains available as a link instead of being the only image display path;
+  - changed `/capture.jpg` to serve the cached latest frame, with the main loop refreshing the cache every ~100 ms;
+  - rebuilt `esp32-s3-ov5640-diag` successfully;
+  - uploaded `esp32-s3-ov5640-diag` successfully to `COM55`;
+  - captured COM55 serial evidence after upload:
+    - warm-up captured a JPEG frame of 2528 bytes;
+    - background capture advanced from `f=10` to `f=24`;
+    - `err=0`;
+    - cached JPEG length stayed valid around 2739 bytes.
+- 2026-07-03 camera 30s freeze follow-up:
+  - user reported the page is smooth for about 30s and then completely freezes;
+  - inspected `src/ov5640_diag_main.cpp` and found the page was firing `/capture.jpg` on a fixed 250ms interval without waiting for the previous image load to finish;
+  - added one-in-flight browser refresh logic:
+    - next capture request starts only after `img.onload`, `img.onerror`, or a 1500ms guard timeout;
+    - failed/time-out image loads retry more slowly;
+    - `/status` polling is also one-in-flight and reduced to 2s;
+  - replaced diagnostic HTTP request parsing from Arduino `String` to fixed `char` buffers to reduce heap churn during repeated image polling;
+  - separated JPEG cache capacity from current JPEG length with `g_cacheCap`, avoiding repeated `realloc()` when JPEG size changes slightly;
+  - shortened JPEG client write timeout and added counters for `http`, `jpg`, `stat`, `timeouts`, `bad`, and frame `age`;
+  - raised the optional `/stream` diagnostic connection limit from 20s to 60s;
+  - built `esp32-s3-ov5640-diag` successfully;
+  - uploaded `esp32-s3-ov5640-diag` successfully to `COM55`;
+  - captured a 70s serial sample after upload:
+    - frame counter advanced from `f=22` to `f=78`;
+    - `fps` stayed around `1.0-1.1`;
+    - `heap=243620`;
+    - `err=0`;
+    - `cache=2521 cap=2521`;
+    - `http=0 jpg=0 stat=0 to=0 bad=0`;
+  - local PC HTTP verification was still not possible unless the PC joins `NMC-Camera`; phone-side retest remains the final browser proof.
+  - after adding `stat` and `bad` to `/status`, rebuilt and uploaded the final firmware again;
+  - final 35s serial confirmation showed the camera loop still running:
+    - frame counter advanced from `f=6` to `f=34`;
+    - `heap` settled at `243372`;
+    - `cache=2588 cap=2588`;
+    - `age=0`;
+    - early `err=2` did not increase during the sample.
+  - ran a completion audit after the goal resumed:
+    - `session-catchup.py` reported unsynced context and recommended reading the planning files;
+    - re-read `task_plan.md`, `findings.md`, and `progress.md`;
+    - confirmed current source still has direct `<img id='f' src='/capture.jpg?boot=1'>` and one-in-flight refresh logic;
+    - confirmed current PC network profile is `stu-xdwlan`;
+    - `Test-NetConnection 192.168.4.1 -Port 80` timed out;
+    - `ping -n 1 -w 1000 192.168.4.1` timed out;
+    - `netsh wlan show networks mode=bssid` only listed `stu-xdwlan`, so this PC cannot currently verify the AP/browser side without changing WiFi or using the user's phone.
+  - continued the active-goal audit and read the skill files again because the goal explicitly names `karpathy-guidelines` and `planning-with-files`;
+  - added AP observability to `src/ov5640_diag_main.cpp`:
+    - `g_apStarted`;
+    - `/status` fields `ap`, `stations`, `ip`, and `channel`;
+    - startup log for `softAPConfig()` / `softAP()`;
+    - periodic `[CAM]` fields `ap`, `sta`, `ip`, and `ch`;
+  - built `esp32-s3-ov5640-diag` successfully after AP observability changes;
+  - uploaded it to `COM55` successfully;
+  - captured 45s serial evidence:
+    - `ap=ok sta=0 ip=192.168.4.1 ch=6`;
+    - `err=0`;
+    - frame counter advanced from `f=21` to `f=53`;
+  - repeated a non-invasive Windows WLAN scan in parallel:
+    - `NMC-Camera` still did not appear;
+    - only campus networks on 5GHz appeared.
+  - changed the camera AP channel from 6 to 1 for compatibility retesting;
+  - rebuilt and uploaded `esp32-s3-ov5640-diag` successfully again;
+  - captured another 45s serial sample:
+    - `ap=ok sta=0 ip=192.168.4.1 ch=1`;
+    - `err=0`;
+    - frame counter advanced from `f=16` to `f=35`;
+  - repeated the Windows WLAN scan after the channel-1 upload:
+    - `NMC-Camera` still did not appear;
+    - the PC still cannot verify browser output without an AP-connected phone/client or a local WiFi state change.
+  - user provided phone-side `/status` from an AP-connected client:
+    - `valid=true camera=true ap=true stations=1`;
+    - `cache=2571 cap=2571`;
+    - `http=16 jpg=3 stat=4`;
+    - `timeouts=3 bad=6`;
+  - interpreted the new evidence as `/capture.jpg` delivery timeout rather than AP, camera init, or frame cache failure;
+  - changed `src/ov5640_diag_main.cpp`:
+    - added `HTTP_LINE_TIMEOUT_MS 400`;
+    - added `JPEG_WRITE_TIMEOUT_MS 1200`;
+    - reduced `writeClient()` chunks from 1024 bytes to 512 bytes;
+    - changed header-line drain timeout from 30ms to 50ms;
+    - changed `/capture.jpg` cached JPEG write timeout from 180ms to 1200ms;
+    - added `c.flush()` after cached JPEG writes.
+  - rebuilt `esp32-s3-ov5640-diag` successfully;
+  - uploaded `esp32-s3-ov5640-diag` to `COM55` successfully;
+  - captured a 40s serial sample after upload:
+    - `ap=ok sta=0 ip=192.168.4.1 ch=1`;
+    - `err=0`;
+    - `cache=2566 cap=2573`;
+    - frame counter advanced from `f=7` to `f=47`.
+  - user provided a new `/status` showing `jpg=54` and `timeouts=54`, proving every JPEG request still timed out;
+  - re-audited `writeClient()` and found it still depended on `WiFiClient::availableForWrite()` before every write;
+  - removed the `availableForWrite()` gate so cached JPEG responses now attempt `c.write()` directly in 512-byte chunks;
+  - rebuilt `esp32-s3-ov5640-diag` successfully;
+  - uploaded `esp32-s3-ov5640-diag` to `COM55` successfully;
+  - captured a 35s serial sample after upload:
+    - `ap=ok sta=0 ip=192.168.4.1 ch=1`;
+    - `err=0`;
+    - `cache=2589 cap=2589`;
+    - frame counter advanced from `f=12` to `f=51`.
+  - inspected current source after the user's stale-status report and confirmed `/status` now includes `seq`, `Content-Length`, and strong no-cache headers;
+  - logged the latest phone evidence where repeated refreshes showed unchanged values (`jpg=26`, `timeouts=9`);
+  - next required check is a cache-busted phone request to `/status?fresh=...` after reconnecting to `NMC-Camera`; if `seq` is missing or does not increment, the phone is still showing stale data rather than live ESP32 status.
+  - continued the active goal after session catchup:
+    - read the skill files for `karpathy-guidelines` and `planning-with-files`;
+    - ran `session-catchup.py`, which reported the previous stale-status response and recommended reading planning files;
+    - re-read `task_plan.md`, `findings.md`, and `progress.md`;
+    - audited current `src/ov5640_diag_main.cpp` and found the root page had a direct `/capture.jpg?boot=1` image but still sent the whole HTML body via one large `printf` without `Content-Length`.
+  - patched `src/ov5640_diag_main.cpp`:
+    - added `FW_TAG` as `camdiag-20260704-html1`;
+    - added the same `fw` field to `/status`;
+    - added visible root-page text `fw: camdiag-20260704-html1`;
+    - moved root HTML into `INDEX_HTML`;
+    - added `sendHtml()` so the root page is sent with explicit `Content-Length` through `writeClient()`;
+    - kept `/capture.jpg` as the primary image source and kept `/stream` as the optional diagnostic link.
+  - built `esp32-s3-ov5640-diag` successfully after the tagged HTML patch.
+  - uploaded `esp32-s3-ov5640-diag` successfully to `COM55`.
+  - captured a 45s serial sample after upload:
+    - `ap=ok sta=0 ip=192.168.4.1 ch=1`;
+    - `err=0`;
+    - `cache=2400-2430 cap=2430`;
+    - `heap=243712`;
+    - frame counter advanced from `f=31` to `f=71`;
+    - frame `age=0-1`;
+    - no phone/browser client was connected during the sample (`http=0 jpg=0 stat=0 to=0 bad=0`).
+  - current required phone check:
+    - root page should visibly show `fw: camdiag-20260704-html1`;
+    - `/status?fresh=1` should include `"fw":"camdiag-20260704-html1"` and `"seq":...`;
+    - repeated `/status?fresh=...` loads should increment `seq`.
+  - continued the active goal and performed another non-invasive local audit:
+    - reread the named skill files and the current camera plan;
+    - checked project memory for `D:\Code\NMC` guardrails, confirming the current work should stay in ESP32 diagnostic scope and avoid flight-controller/motor work;
+    - `netsh wlan show interfaces` showed the PC is still on `stu-xdwlan`, 5 GHz channel 40;
+    - `netsh wlan show networks mode=bssid` listed only `stu-xdwlan`, not `NMC-Camera`;
+    - `ping 192.168.4.1` timed out;
+    - `Test-NetConnection 192.168.4.1 -Port 80` did not complete within the 20s timeout;
+    - a fresh 25s serial sample still showed `ap=ok sta=0 ip=192.168.4.1 ch=1`, `err=0`, valid cache around `2454` bytes, and no HTTP clients (`http=0 jpg=0 stat=0 to=0 bad=0`).
+  - conclusion for this pass:
+    - no additional firmware change was made;
+    - current firmware is alive and waiting for an AP-connected client;
+    - final camera-page verification still needs the phone to load the tagged page/status.
+  - proposed the next behavior-level fix and paused for approval because it changes the root-page first-frame loading strategy:
+    - recommended A方案: inline the latest cached JPEG as a base64 `data:image/jpeg` image in the root HTML so the first visible frame no longer depends on a second `/capture.jpg` request;
+    - keep `/capture.jpg` polling for refresh after the first frame;
+    - do not touch camera capture parameters, AP settings, flight-controller code, motors, arming, or assist outputs;
+    - implementation is intentionally pending user approval of A方案.
+  - after the resumed goal turn, re-ran `session-catchup.py` and rechecked current source:
+    - current root page still uses `<img id='f' ... src='/capture.jpg?boot=1'>`;
+    - current firmware tag remains `camdiag-20260704-html1`;
+    - `sendHtml()` still sends static `INDEX_HTML` with `Content-Length`;
+    - no code changes were made in this pass because the proposed inline-first-frame behavior still needs explicit approval.
+  - user provided decisive phone evidence from the tagged firmware:
+    - `http://192.168.4.1/?v=html1` shows a camera image;
+    - the image is frozen;
+    - `/status` includes `"fw":"camdiag-20260704-html1"`, so the phone is hitting the current firmware;
+    - `/status` shows `jpg=324`, `timeouts=0`, and `bad=0`, so HTTP/JPEG delivery is no longer the active failure;
+    - `/status` shows `camera=false`, `errors=12230`, and `age=36716754`, so the active failure is stale cached image after camera capture stopped.
+  - audited current recovery code:
+    - `captureFrame()` sets `g_cameraReady=false` immediately after any failed `esp_camera_fb_get()`;
+    - it does not immediately deinitialize/reinitialize the camera driver when the capture backend stalls;
+    - the loop retries `startCamera(1)` every 3 seconds, but the phone evidence shows this retry path did not recover the camera after the stall.
+  - updated the camera plan:
+    - marked AP-connected client image display as proven;
+    - added a new pending fix for camera capture recovery so stale cached frames do not freeze forever.
+  - user confirmed the camera recovery fix.
+  - implemented recovery in `src/ov5640_diag_main.cpp`:
+    - changed `FW_TAG` to `camdiag-20260704-recover1`;
+    - added `CAMERA_CAPTURE_FAIL_LIMIT`, `CAMERA_RESTART_DELAY_MS`, `CAMERA_RETRY_MS`, and `CAMERA_STALE_RESTART_MS`;
+    - added camera driver state, restart-pending state, capture fail streak, restart request counter, and recovery success counter;
+    - added `/status` fields `cfail`, `creq`, and `crec`;
+    - changed `captureFrame()` so a single failed `esp_camera_fb_get()` no longer immediately marks the camera dead;
+    - added `requestCameraRestart()` to deinit the camera and schedule a delayed reinit after repeated failures or stale frames;
+    - changed the loop to perform pending restarts and detect stale cached frames.
+  - built `esp32-s3-ov5640-diag` successfully and uploaded it to `COM55`.
+  - first recovery serial sample found a new firmware bug:
+    - repeated false `restart requested reason=stale` events occurred even with fresh frames;
+    - root cause was stale checking with a `now` timestamp captured before `captureFrame()` updated `g_lastFrameMs`, causing unsigned timestamp underflow.
+  - fixed that bug by refreshing `now = millis()` immediately after `captureFrame()` and before stale-frame checking.
+  - rebuilt and uploaded the fixed recovery firmware to `COM55`.
+  - after that upload, startup repeatedly failed to detect the camera:
+    - `Camera probe failed with error 0x105(ESP_ERR_NOT_FOUND)`;
+    - AP still started at `192.168.4.1`;
+    - status log showed `f=0`, `cache=0`, `ap=ok`, and no camera frame.
+  - added `recoverSccbBus()` before `esp_camera_init()` and changed `FW_TAG` to `camdiag-20260704-recover2`;
+    - the SCCB recovery clocks SIOC and sends a STOP condition on SIOD/SIOC before camera init;
+    - this is the strongest software-only reset available because `CAM_PIN_PWDN` and `CAM_PIN_RESET` are both `-1`.
+  - built and uploaded `camdiag-20260704-recover2` to `COM55`.
+  - 90s serial sample after recover2 still showed repeated `ESP_ERR_NOT_FOUND`, with AP alive but camera absent:
+    - `f=0`;
+    - `cache=0`;
+    - `err` increasing with init retries;
+    - no PID detection.
+  - current state:
+    - firmware recovery and SCCB bus recovery are in place;
+    - the camera module currently needs a real power-cycle/hardware reset or wiring/power check before software can verify `camera=true` again.
+  - resumed after the latest goal continuation and performed a read-only serial recheck:
+    - current firmware remains the recovery path with AP alive;
+    - serial still reports repeated `Camera probe failed with error 0x105(ESP_ERR_NOT_FOUND)`;
+    - `[CAM]` lines show `f=0`, `cache=0`, `ap=ok`, `ip=192.168.4.1`, and increasing `err`;
+    - no evidence yet that the camera module has been power-cycled or has resumed SCCB replies.
+  - current blocker for final completion:
+    - a real camera-side power-cycle/hardware reset or wiring/power correction is required before software can verify `camera=true`, low `age`, and increasing `frames`.
+  - 2026-07-04 recovery confirmation after context resume:
+    - re-read the planning files and current `src/ov5640_diag_main.cpp`;
+    - confirmed the active firmware tag remains `camdiag-20260704-recover2`;
+    - captured a fresh 75s COM55 serial sample;
+    - AP remained alive: `ap=ok ip=192.168.4.1 ch=1`;
+    - camera init still failed repeatedly with `Camera probe failed with error 0x105(ESP_ERR_NOT_FOUND)`;
+    - `[CAM]` stayed at `f=0`, `cache=0`, `cfail=0`, `creq=0`, `crec=0`, with `err` increasing from 42 to 48;
+    - conclusion unchanged: recovery firmware is running, but the camera module is not responding to SCCB, so the next gate is a real power-cycle/hardware reset or wiring/power correction.
+  - 2026-07-04 strict continuation audit:
+    - reran `session-catchup.py`, `git diff --stat`, and re-read `task_plan.md`, `findings.md`, `progress.md`, and `include/config.h`;
+    - verified `esp32-s3-ov5640-diag` still builds successfully;
+    - verified current source still has direct root image source `/capture.jpg?boot=1`, explicit `Content-Length` for HTML, `/status` firmware tag, camera recovery, and SCCB bus recovery;
+    - captured another 60s COM55 serial sample;
+    - repeated evidence: `Camera probe failed with error 0x105(ESP_ERR_NOT_FOUND)`, `f=0`, `cache=0`, `ap=ok`, `ip=192.168.4.1`, with `err` increasing from 66 to 70;
+    - this is the third consecutive recovery audit showing the same blocker after software recovery was added, so the camera goal is blocked on external hardware action: power-cycle/reset/reseat/repair camera power or SCCB wiring, then retest.
+  - 2026-07-04 hardware check follow-up:
+    - user measured camera `SDA/SCL` idle voltage at a little over 3V, with VCC/GND and continuity checks otherwise matching expectations;
+    - this ruled out SDA/SCL being hard-shorted low and made a bad connection, power/reset state, or previous module latch-up more likely than a browser bug;
+    - after the hardware check/reconnection, a fresh 45s COM55 sample showed the camera alive again:
+      - `[CAM] f=873 -> 1073`;
+      - `fps=4.9`;
+      - `err=0`;
+      - `cache=2741-3007 cap=3072`;
+      - `age=165`;
+      - `ap=ok ip=192.168.4.1 ch=1`;
+    - conclusion: the camera backend has recovered and is producing cached JPEG frames again. The remaining completion gate is an AP-connected phone/browser check that the root page image actually moves and `/status` reports `camera=true` with increasing `frames`.
+  - 2026-07-04 browser-verification wait:
+    - re-read the camera completion gate and current `src/ov5640_diag_main.cpp` status fields;
+    - captured a 90s COM55 serial sample while waiting for an AP client;
+    - camera backend remained healthy: `[CAM] f=1773 -> 2173`, `fps=4.9`, `err=0`, `cache=3007 cap=3072`, `age=165`;
+    - no AP client connected during this sample: `sta=0 http=0 jpg=0 stat=0`;
+    - completion remains unproven only because no phone/browser request reached the ESP32 during the sample.
+  - 2026-07-04 repeated browser-verification wait:
+    - captured another 75s COM55 serial sample;
+    - camera backend still stayed healthy: `[CAM] f=2573 -> 2873`, `fps=5.0`, `err=0`, `cache=2754-3007 cap=3072`, `age=165`;
+    - still no AP client or browser traffic reached the ESP32: `sta=0 http=0 jpg=0 stat=0`;
+    - final page verification still requires a phone/client connected to `NMC-Camera` opening `/` and `/status`.
+  - 2026-07-04 AP visibility check:
+    - Windows WLAN interface remains connected to `stu-xdwlan` on 5GHz channel 60;
+    - `netsh wlan show networks mode=bssid` now sees `NMC-Camera` with 99% signal, WPA2-Personal, 2.4GHz channel 1;
+    - a parallel 75s COM55 sample showed the camera still healthy: `[CAM] f=3373 -> 3723`, `fps=5.0`, `err=0`, `cache=2981-2993 cap=3072`, `age=165`;
+    - the same sample still had no connected AP client or HTTP traffic: `sta=0 http=0 jpg=0 stat=0`;
+    - completion is now blocked only on AP-client/browser verification. Either the user connects a phone and sends `/status`, or the user approves temporarily switching the PC WiFi from `stu-xdwlan` to `NMC-Camera` for local HTTP verification.
+  - 2026-07-04 phone `/status` evidence:
+    - user provided phone-side `/status` from `NMC-Camera`;
+    - firmware is current: `fw=camdiag-20260704-recover2`;
+    - phone is connected: `stations=1`, `ap=true`, `ip=192.168.4.1`, `channel=1`;
+    - camera backend is healthy: `camera=true`, `valid=true`, `frames=169`, `fps=5`, `errors=0`, `cache=3022`, `cap=3022`, `age=505`;
+    - `/status` transport is working: `stat=1`, `timeouts=0`;
+    - remaining gap: `jpg=0`, so `/capture.jpg` has not yet been requested successfully by the browser image path.
+  - 2026-07-04 `/capture.jpg` wait:
+    - captured another 75s COM55 sample specifically watching for image requests;
+    - camera backend stayed healthy after reset/reboot: `[CAM] f=395 -> 745`, `fps=5.0`, `err=0`, `cache=2980-3040 cap=3050`, `age=175`;
+    - no AP client or image/status traffic was present during this sample: `sta=0 http=0 jpg=0 stat=0`;
+    - the only missing proof remains a phone/client opening `/capture.jpg` or the root page image and then rechecking `/status` for `jpg>0`.
+  - 2026-07-04 repeated `/capture.jpg` wait:
+    - source audit confirmed the current root HTML has a direct `<img id='f' ... src='/capture.jpg?boot=1'>`;
+    - captured another 60s COM55 sample;
+    - camera backend remained healthy: `[CAM] f=1195 -> 1445`, `fps=5.0`, `err=0`, `cache=2565-3055 cap=3056`, `age=175`;
+    - no AP client or HTTP traffic was present during this sample: `sta=0 http=0 jpg=0 stat=0`;
+    - no further firmware-side action can prove the browser image path without an AP client requesting `/capture.jpg`.
+  - 2026-07-04 final phone verification:
+    - user directly opened `http://192.168.4.1/capture.jpg?manual=1` and confirmed it shows a camera image;
+    - refreshing that URL shows the current live frame each time;
+    - follow-up `/status?fresh=jpg1` showed `fw=camdiag-20260704-recover2`, `camera=true`, `valid=true`, `frames=947`, `fps=5`, `errors=0`, `cache=3051`, `cap=3051`, `stations=1`, `http=29`, `jpg=12`, `stat=3`, `timeouts=0`, `bad=0`, and `age=179`;
+    - this closes the image-path bug: camera capture, cached JPEG delivery, AP client access, and status diagnostics are all working.
