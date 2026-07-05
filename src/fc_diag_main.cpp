@@ -54,7 +54,7 @@ void loop()
         fcBridge.update();
 
         const auto& fc = fcBridge.getState();
-        const auto& diag = fcBridge.getMSP().getDiag();
+        const auto& diag = fcBridge.getMSPDiag();
 
         bool online = fcBridge.isOnline();
 

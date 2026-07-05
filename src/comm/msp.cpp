@@ -4,6 +4,8 @@
  */
 
 #include "comm/msp.h"
+#include "comm/msp_status_flags.h"
+#include "config.h"
 #include <string.h>
 
 void MSP::begin(HardwareSerial& serial, uint32_t baud, int rxPin, int txPin)
@@ -251,25 +253,36 @@ bool MSP::readStatus(uint16_t& cycleTime, uint8_t& armingFlags)
 {
     MSPFrame f;
     if (!request(MSP_STATUS, f)) return false;
-    if (f.size < 11) return false;
+    if (f.size < 10) return false;
 
     cycleTime = (uint16_t)(f.payload[0] | (f.payload[1] << 8));
-    armingFlags = (f.size >= 13) ? f.payload[12] : 0;
+    uint32_t statusModeFlags = (uint32_t)f.payload[6] |
+        ((uint32_t)f.payload[7] << 8) |
+        ((uint32_t)f.payload[8] << 16) |
+        ((uint32_t)f.payload[9] << 24);
+    armingFlags = betaflightMspStatusReportsArmed(statusModeFlags) ? 0x01 : 0;
     return true;
 }
 
 bool MSP::setRawRC(const uint16_t channels[16])
 {
+#if ENABLE_REAL_FC_OUTPUT
     uint8_t buf[32];
     for (int i = 0; i < 8; i++) {
         buf[i * 2] = channels[i] & 0xFF;
         buf[i * 2 + 1] = (channels[i] >> 8) & 0xFF;
     }
     return sendCommand(MSP_SET_RAW_RC, buf, 16);
+#else
+    (void)channels;
+    strcpy(m_diag.lastError, "raw_rc disabled");
+    return false;
+#endif
 }
 
 bool MSP::sendArmCommand(bool arm)
 {
+#if ENABLE_ESP32_ARM_DISARM
     MSPFrame f;
     if (!request(MSP_ARMING_CONFIG, f)) return false;
     if (f.size < 1) return false;
@@ -281,4 +294,9 @@ bool MSP::sendArmCommand(bool arm)
     else buf[0] &= ~0x01;
 
     return sendCommand(MSP_SET_ARMING_CONFIG, buf, f.size);
+#else
+    (void)arm;
+    strcpy(m_diag.lastError, "arm disabled");
+    return false;
+#endif
 }

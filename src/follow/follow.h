@@ -1,6 +1,6 @@
 /**
  * @file    follow.h
- * @brief   自主跟随控制 v2.0 (通过 MSP 虚拟 RC 控制飞控)
+ * @brief   自主跟随控制 v2.0 (legacy PID; real FC output disabled by default)
  */
 
 #ifndef FOLLOW_H
@@ -23,7 +23,7 @@ class FollowController {
 public:
     void begin();
 
-    /* 每帧调用, 计算控制量并发送到飞控 */
+    /* 每帧调用。默认不发送真实飞控输出，见 ENABLE_LEGACY_FOLLOW_FC_OUTPUT。 */
     void update();
 
     /* 模式切换 */

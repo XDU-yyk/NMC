@@ -4,8 +4,11 @@
  * 
  * 功能: 
  *   - 定时读取飞控姿态/高度/电池/RC 状态
- *   - 通过虚拟 RC 通道控制飞控 (位置 → MSP_SET_RAW_RC)
+ *   - FC-ready 构建中通过虚拟 RC 通道控制飞控 (位置 → MSP_SET_RAW_RC)
  *   - 飞控连接健康检测
+ *
+ * 默认构建不发送 MSP_SET_RAW_RC; FCBridge::update() 仍会受
+ * ENABLE_REAL_FC_OUTPUT 编译期开关和运行时安全门双重限制。
  */
 
 #ifndef FC_BRIDGE_H
@@ -38,11 +41,31 @@ struct FCState {
 struct FCOutput {
     uint16_t roll;        // 1000-2000, 中值 1500
     uint16_t pitch;
-    uint16_t throttle;
     uint16_t yaw;
+    uint16_t throttle;
     uint16_t aux1;        // 飞行模式开关
     uint16_t aux2;
     bool     overrideRC;  // 是否接管 RC 控制
+};
+
+struct FCOutputDiag {
+    uint32_t setOutputCalls = 0;
+    uint32_t overrideRequests = 0;
+    uint32_t clearRequests = 0;
+    uint32_t rawRcAttempts = 0;
+    uint32_t rawRcOk = 0;
+    uint32_t rawRcFail = 0;
+    uint32_t gateBlocks = 0;
+    uint32_t staleBlocks = 0;
+    uint32_t lastSetMs = 0;
+    uint32_t lastSendMs = 0;
+    uint16_t lastRoll = FC_RC_MID;
+    uint16_t lastPitch = FC_RC_MID;
+    uint16_t lastYaw = FC_RC_MID;
+    uint16_t lastThrottle = 1000;
+    uint16_t lastAux1 = FC_RC_MID;
+    uint16_t lastAux2 = 1000;
+    const char* lastReason = "init";
 };
 
 class FCBridge {
@@ -58,20 +81,27 @@ public:
     /* 发送控制指令到飞控 */
     void setOutput(const FCOutput& out);
 
+    const FCOutputDiag& getOutputDiag() const { return m_outputDiag; }
+
     /* 飞控是否在线 (最近 N ms 内收到数据) */
     bool isOnline() const;
+
+    /* FC-ready assist gate: online + Betaflight ARM active-box + MC6C CH6/AUX2 high */
+    bool isAssistGateOpen() const;
 
     /* 解锁/上锁飞控 */
     bool arm();
     bool disarm();
 
-    /* 底层 MSP 接口 (供高级控制使用) */
-    MSP& getMSP() { return m_msp; }
+    /* 只读 MSP 诊断计数；不暴露可写 MSP 对象，避免绕过 FCBridge 安全门。 */
+    const MSPDiag& getMSPDiag() const { return m_msp.getDiag(); }
 
 private:
     MSP     m_msp;
     FCState m_state;
     FCOutput m_lastOutput;
+    FCOutputDiag m_outputDiag;
+    uint32_t m_lastOutputUpdate = 0;
 
     uint32_t m_lastReadAttitude  = 0;
     uint32_t m_lastReadAltitude  = 0;
@@ -86,6 +116,7 @@ private:
     void pollBattery();
     void pollRC();
     void pollStatus();
+    void sendRawRC(const FCOutput& out);
 };
 
 extern FCBridge fcBridge;

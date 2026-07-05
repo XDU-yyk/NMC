@@ -8,6 +8,7 @@
 
 #include "web/server.h"
 #include "web/index_html.h"
+#include <string.h>
 
 WebServerManager webServer;
 WebServerManager* g_webServerInstance = nullptr;
@@ -19,7 +20,30 @@ extern size_t   getCamLen();
 extern bool     getCamValid();
 extern uint32_t getCamFrames();
 extern uint32_t getCamErrors();
+extern "C" bool requestCameraRetryFromWeb() __attribute__((weak));
 #endif
+extern "C" bool setSimFcScenarioFromWeb(const char* scenario) __attribute__((weak));
+/* 方向意图 HTTP 入口 (unified-web 为 HTTP-only, 无 WebSocket)。
+   各轴归一化 -1~+1; takeover 非 0 表示网页暂停/交还遥控。 */
+extern "C" bool setDirectionFromWeb(float fwd, float right, float yaw,
+                                    float thr, bool takeover) __attribute__((weak));
+
+static String getQueryValue(const String& requestLine, const char* key)
+{
+    const int queryStart = requestLine.indexOf('?');
+    if (queryStart < 0) return String();
+
+    String token = String(key) + "=";
+    int valueStart = requestLine.indexOf(token, queryStart + 1);
+    if (valueStart < 0) return String();
+    valueStart += token.length();
+
+    int valueEnd = requestLine.indexOf('&', valueStart);
+    int spaceEnd = requestLine.indexOf(' ', valueStart);
+    if (valueEnd < 0 || (spaceEnd >= 0 && spaceEnd < valueEnd)) valueEnd = spaceEnd;
+    if (valueEnd < 0) valueEnd = requestLine.length();
+    return requestLine.substring(valueStart, valueEnd);
+}
 
 static const IPAddress AP_IP(192, 168, 4, 1);
 static const IPAddress AP_GATEWAY(192, 168, 4, 1);
@@ -175,6 +199,18 @@ void WebServerManager::handleHttpRequest(WiFiClient& client)
         serializeJson(doc, out);
         sendJson(client, out);
     }
+    else if (requestLine.startsWith("GET /status ") || requestLine.startsWith("GET /status?"))
+    {
+        JsonDocument doc;
+        buildTelemetryJson(doc);
+        doc["apStations"] = WiFi.softAPgetStationNum();
+        doc["ip"] = WiFi.softAPIP().toString();
+        doc["channel"] = WiFi.channel();
+
+        String out;
+        serializeJson(doc, out);
+        sendJson(client, out);
+    }
     else if (requestLine.startsWith("GET /api/params ") || requestLine.startsWith("GET /api/params?"))
     {
         JsonDocument doc;
@@ -232,7 +268,47 @@ void WebServerManager::handleHttpRequest(WiFiClient& client)
             sendText(client, "bad json\n");
         }
     }
+    else if (requestLine.startsWith("GET /api/fc/sim ") || requestLine.startsWith("GET /api/fc/sim?"))
+    {
+        String scenario = getQueryValue(requestLine, "scenario");
+        if (!setSimFcScenarioFromWeb) {
+            sendText(client, "unsupported\n");
+        } else if (scenario.length() == 0) {
+            sendText(client, "missing scenario\n");
+        } else {
+            const bool ok = setSimFcScenarioFromWeb(scenario.c_str());
+            sendText(client, ok ? "ok\n" : "bad scenario\n");
+        }
+    }
+    else if (requestLine.startsWith("GET /api/dir ") || requestLine.startsWith("GET /api/dir?"))
+    {
+        if (!setDirectionFromWeb) {
+            sendText(client, "unsupported\n");
+        } else {
+            String sf = getQueryValue(requestLine, "fwd");
+            String sr = getQueryValue(requestLine, "right");
+            String sy = getQueryValue(requestLine, "yaw");
+            String st = getQueryValue(requestLine, "thr");
+            String sk = getQueryValue(requestLine, "takeover");
+            float fwd = sf.length() ? sf.toFloat() : 0.0f;
+            float rgt = sr.length() ? sr.toFloat() : 0.0f;
+            float yaw = sy.length() ? sy.toFloat() : 0.0f;
+            float thr = st.length() ? st.toFloat() : 0.0f;
+            bool  tko = (sk == "1" || sk == "true");
+            const bool ok = setDirectionFromWeb(fwd, rgt, yaw, thr, tko);
+            sendText(client, ok ? "ok\n" : "gated\n");
+        }
+    }
 #ifdef ENABLE_CAMERA
+    else if (requestLine.startsWith("GET /api/camera/retry ") || requestLine.startsWith("GET /api/camera/retry?"))
+    {
+        if (requestCameraRetryFromWeb) {
+            const bool queued = requestCameraRetryFromWeb();
+            sendText(client, queued ? "queued\n" : "busy\n");
+        } else {
+            sendText(client, "unsupported\n");
+        }
+    }
     else if (requestLine.startsWith("GET /capture.jpg") || requestLine.startsWith("GET /capture.jpeg"))
     {
         if (!getCamValid()) {
@@ -313,6 +389,20 @@ void WebServerManager::handleClientMessage(WebsocketsClient& client, WebsocketsM
 
     const char* cmd = doc["cmd"];
     int value = doc["value"] | 0;
+
+    // 方向意图消息: {"cmd":"dir","fwd":..,"right":..,"yaw":..,"thr":..,"takeover":bool}
+    if (cmd && strcmp(cmd, "dir") == 0) {
+        if (m_dirCallback) {
+            float fwd = doc["fwd"]   | 0.0f;
+            float rgt = doc["right"] | 0.0f;
+            float yaw = doc["yaw"]   | 0.0f;
+            float thr = doc["thr"]   | 0.0f;
+            bool  tko = doc["takeover"] | false;
+            m_dirCallback(fwd, rgt, yaw, thr, tko);
+        }
+        return;
+    }
+
     LOG(LOG_TAG_WEB, "cmd: %s (val=%d)", cmd, value);
 
     // 通用命令转发 — 具体处理由注册方通过 onCommand 完成
@@ -361,6 +451,21 @@ void WebServerManager::fillSimData(TelemetryData& data)
     data.fcOnline    = false;
     data.armed       = false;
     data.flightMode  = 0;
+    data.rcChannelCount = 0;
+    data.fcAssistSwitch = false;
+    data.fcAssistGateOpen = false;
+    data.fcRealOutputCompiled = false;
+    data.fcRealOnline = false;
+    data.rxHasSixChannels = false;
+    data.rxCenterOk = false;
+    data.rxThrottleLow = false;
+    data.rxAux1Valid = false;
+    data.rxAux2Valid = false;
+    data.rxAux1Low = false;
+    data.rxAux2Low = false;
+    data.rxBenchReady = false;
+    data.fcOutReason = "n/a";
+    data.fcMspLastError = "n/a";
 
     // 数据源在线状态（无硬件时模拟离线）
     data.tofOnline   = false;
@@ -422,13 +527,68 @@ void WebServerManager::buildTelemetryJson(JsonDocument& doc)
 
     // 飞控
     doc["fcOnline"]   = data.fcOnline;
+    doc["fcSimulated"] = data.fcSimulated;
     doc["armed"]      = data.armed;
     doc["flightMode"] = data.flightMode;
+    doc["fcScenario"] = data.fcScenario;
+    doc["fcScenarioName"] = data.fcScenarioName ? data.fcScenarioName : "offline";
+    doc["fcFailsafe"] = data.fcFailsafe;
+    doc["fcCycleTimeUs"] = data.fcCycleTimeUs;
+    doc["fcCpuLoad"] = data.fcCpuLoad;
+    doc["fcLinkQuality"] = data.fcLinkQuality;
+    doc["fcVario"] = data.fcVario;
+    doc["rcRoll"] = data.rcRoll;
+    doc["rcPitch"] = data.rcPitch;
+    doc["rcThrottle"] = data.rcThrottle;
+    doc["rcYaw"] = data.rcYaw;
+    doc["rcAux1"] = data.rcAux1;
+    doc["rcAux2"] = data.rcAux2;
+    doc["rcChannelCount"] = data.rcChannelCount;
+    doc["fcAssistSwitch"] = data.fcAssistSwitch;
+    doc["fcAssistGateOpen"] = data.fcAssistGateOpen;
+    doc["fcRealOutputCompiled"] = data.fcRealOutputCompiled;
+    doc["fcRealOnline"] = data.fcRealOnline;
+    doc["rxHasSixChannels"] = data.rxHasSixChannels;
+    doc["rxCenterOk"] = data.rxCenterOk;
+    doc["rxThrottleLow"] = data.rxThrottleLow;
+    doc["rxAux1Valid"] = data.rxAux1Valid;
+    doc["rxAux2Valid"] = data.rxAux2Valid;
+    doc["rxAux1Low"] = data.rxAux1Low;
+    doc["rxAux2Low"] = data.rxAux2Low;
+    doc["rxBenchReady"] = data.rxBenchReady;
+    doc["fcOutSetCalls"] = data.fcOutSetCalls;
+    doc["fcOutOverrideRequests"] = data.fcOutOverrideRequests;
+    doc["fcOutClearRequests"] = data.fcOutClearRequests;
+    doc["fcOutRawAttempts"] = data.fcOutRawAttempts;
+    doc["fcOutRawOk"] = data.fcOutRawOk;
+    doc["fcOutRawFail"] = data.fcOutRawFail;
+    doc["fcOutGateBlocks"] = data.fcOutGateBlocks;
+    doc["fcOutStaleBlocks"] = data.fcOutStaleBlocks;
+    doc["fcOutLastSetAgeMs"] = data.fcOutLastSetAgeMs;
+    doc["fcOutLastSendAgeMs"] = data.fcOutLastSendAgeMs;
+    doc["fcOutRoll"] = data.fcOutRoll;
+    doc["fcOutPitch"] = data.fcOutPitch;
+    doc["fcOutYaw"] = data.fcOutYaw;
+    doc["fcOutThrottle"] = data.fcOutThrottle;
+    doc["fcOutAux1"] = data.fcOutAux1;
+    doc["fcOutAux2"] = data.fcOutAux2;
+    doc["fcOutReason"] = data.fcOutReason ? data.fcOutReason : "n/a";
+    doc["fcMspTxFrames"] = data.fcMspTxFrames;
+    doc["fcMspTxBytes"] = data.fcMspTxBytes;
+    doc["fcMspRxBytes"] = data.fcMspRxBytes;
+    doc["fcMspTimeouts"] = data.fcMspTimeouts;
+    doc["fcMspLastError"] = data.fcMspLastError ? data.fcMspLastError : "n/a";
 
     // 数据源在线状态
     doc["tofOnline"]   = data.tofOnline;
     doc["gpsOnline"]   = data.gpsOnline;
     doc["camOnline"]   = data.camOnline;
+    doc["camValid"]    = data.camValid;
+    doc["camFrames"]   = data.camFrames;
+    doc["camErrors"]   = data.camErrors;
+    doc["camAgeMs"]    = data.camAgeMs;
+    doc["camBytes"]    = data.camBytes;
+    doc["camRecoveries"] = data.camRecoveries;
     doc["dataSource"]  = data.dataSource;
     doc["errorFlags"]  = data.errorFlags;
     doc["tofStatus"]  = data.tofStatus;

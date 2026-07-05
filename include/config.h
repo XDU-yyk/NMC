@@ -70,7 +70,7 @@
 /* ── VL53L1X ToF 激光测距 (I2C Wire) ── */
 /* 引脚 GPIO4/5 不与摄像头 DVP 总线冲突，两个固件可共用接线。 */
 /* 注意：原 GPIO4/5 曾预留为 UWB SPI SCK/MISO，UWB 无实物故让出。 */
-#define TOF_I2C_PORT        Wire1
+#define TOF_I2C_PORT        Wire
 #define TOF_SDA             4
 #define TOF_SCL             5
 #define TOF_I2C_FREQ        10000
@@ -229,5 +229,88 @@
 #define MAX_TILT_ANGLE      35.0f
 #define SIGNAL_LOST_TIMEOUT 3000     // 信号丢失超时 (ms)
 #define RC_FAILSAFE_TIMEOUT 1000     // 遥控信号丢失超时 (ms)
+
+/* ================================================================
+ * 真机飞控输出安全门 (方向控制)
+ * ================================================================
+ *
+ * ⚠️ 硬约束 (来自 AGENTS.md): 飞控损坏期间禁止任何真机 MSP 写入 /
+ *    RC override / 解锁 / 电机测试。
+ *
+ * ENABLE_REAL_FC_OUTPUT = 0 时: 方向控制只驱动仿真 (fc_sim), 绝不写真飞控。
+ * 只有在以下条件全部满足时, 才可改为 1:
+ *   1) 已更换/修复飞控且通过 MSP 通信验证;
+ *   2) 已完成无桨桌面检查、电机方向/顺序检查、拴绳受限测试;
+ *   3) 遥控器一键接管已验证有效, 安全开关就位。
+ *   4) Betaflight 已配置并无桨验证 MSP Override / MSP OVERRIDE 模式。
+ * 即使置 1, 运行时仍由 FCBridge 执行在线/解锁/CH6/新鲜度多重门控。
+ */
+#ifndef ENABLE_REAL_FC_OUTPUT
+#define ENABLE_REAL_FC_OUTPUT   0    // 默认禁用: 仅仿真, 不写真飞控
+#endif
+
+/*
+ * Future FC-ready assist gate.
+ *
+ * MC6C channel plan:
+ *   CH1 AIL -> roll
+ *   CH2 ELE -> pitch
+ *   CH3 THR -> throttle
+ *   CH4 RUD -> yaw
+ *   CH5/AUX1 -> arm/mode on the flight controller
+ *   CH6/AUX2 -> ESP32 assist-output permission
+ *
+ * Even in an ENABLE_REAL_FC_OUTPUT build, ESP32 MSP RC output stays locked unless
+ * the FC is online, Betaflight MSP_STATUS reports the ARM active-box bit, and
+ * CH6/AUX2 is above this threshold.
+ * Betaflight must also map CH6 high to MSP Override; CH6 here is only the
+ * ESP32-side permission check.
+ */
+#ifndef REAL_FC_ASSIST_AUX_CHANNEL
+#define REAL_FC_ASSIST_AUX_CHANNEL 6
+#endif
+
+#ifndef REAL_FC_ASSIST_AUX_MIN
+#define REAL_FC_ASSIST_AUX_MIN     1700
+#endif
+
+// Receiver sanity thresholds for MC6C bring-up. These do not authorize flight;
+// they only tell the Web page whether it is safe to continue no-prop bench checks.
+#ifndef MC6C_RC_CENTER_MIN
+#define MC6C_RC_CENTER_MIN         1400
+#endif
+
+#ifndef MC6C_RC_CENTER_MAX
+#define MC6C_RC_CENTER_MAX         1600
+#endif
+
+#ifndef MC6C_RC_LOW_MAX
+#define MC6C_RC_LOW_MAX            1200
+#endif
+
+#ifndef MC6C_RC_HIGH_MIN
+#define MC6C_RC_HIGH_MIN           1700
+#endif
+
+// FC-ready builds must refresh real RC output continuously. If the Web/control
+// loop stops refreshing, FCBridge stops repeating the last command.
+#ifndef REAL_FC_OUTPUT_HOLD_MS
+#define REAL_FC_OUTPUT_HOLD_MS     120
+#endif
+
+// ESP32 must not arm/disarm the flight controller in this project. Keep the
+// API compiled for legacy modules, but make FCBridge::arm/disarm no-op unless a
+// future bench-only build explicitly overrides this macro.
+#ifndef ENABLE_ESP32_ARM_DISARM
+#define ENABLE_ESP32_ARM_DISARM    0
+#endif
+
+// Legacy FollowController PID output is not part of the replacement-FC MC6C
+// acceptance path. Keep it compiled for older code, but do not let it queue real
+// FC output unless a future bench-only build explicitly opts in after the MC6C
+// manual direction gate is proven.
+#ifndef ENABLE_LEGACY_FOLLOW_FC_OUTPUT
+#define ENABLE_LEGACY_FOLLOW_FC_OUTPUT 0
+#endif
 
 #endif // CONFIG_H

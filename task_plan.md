@@ -62,6 +62,10 @@ Goal: eliminate or clearly root-cause intermittent ESP32 Wire errors while readi
 | Standalone scanner sees polluted bus | Scanner sample showed idle before `SDA=1 SCL=1`, after recovery `SDA=0 SCL=1`, dozens of phantom addresses, `0x29 ACK=10/30`, model-ID `ok=0/20`, soft reset write failed `i2c=2` | Stop software-only diagnosis; validate pull-ups/power/module/XSHUT |
 | XSHUT hardware reset restores ToF init | After wiring XSHUT to GPIO10 and uploading Web MVP, 70s serial sample showed `tof:init=1 valid=1 status=0 dist=61-64 fault=none` for most samples | Keep XSHUT enabled; note GPIO10 conflicts with future OV2640 D2 pin |
 | Stability recheck passes with transient read errors | Later 90s sample kept `tof:init=1 valid=1 status=0`, `rec=0`, and distance `61-64mm`; visible `Error 263/-1` appeared but recovered as `fault=none` | Accept for Web MVP; keep fault counters for future hardware cleanup |
+| Replacement-FC static check PowerShell parser error | `run_replacement_fc_static_checks.ps1` failed with `The string is missing the terminator: "` at the final `Write-Host` after Chinese source-string assertions | Replace Chinese source literals with UTF-8 hex assertions so the script is stable under Windows PowerShell source decoding |
+| Replacement-FC static check tried to read a directory | After parser fix, `Get-Content` attempted to read `D:\Code\NMC\src\comm` | Filter recursive source scan to real files before checking external MSP writes |
+| Replacement-FC hardware-action script guard initially matched itself | The new no-upload/no-monitor regex matched `run_replacement_fc_static_checks.ps1` because the regex literal itself contained `--upload-port` | Scan only the executable host/software check scripts with that guard, not the static script that defines the guard |
+| PowerShell command array syntax failed in static check | `Get-Item` reported `LiteralPath` specified more than once after using comma-separated command expressions | Store script paths as strings, then call `Get-Item` inside the loop |
 
 ## Implemented Driver Changes
 
@@ -113,7 +117,7 @@ Status:
 - [x] Define UART3 wiring and Betaflight CLI workflow.
 - [x] Create DeepSeek handoff workflow in `fc_uart3_msp_workflow.md`.
 - [ ] USB-TTL proof on UART3: `#` enters CLI and `24 4D 3C 00 01 01` receives `24 4D 3E ...`.
-- [ ] Update project comments/diagnostic banners from UART6/R6/T6 to UART3/R3/T3.
+- [x] Update active project comments/diagnostic banners from UART6/R6/T6 to UART3/R3/T3.
 - [ ] Build/upload `esp32-s3-fc-uart-probe` and verify `rx=24 4D 3E ...`.
 - [ ] Build/upload `esp32-s3-fc-diag` and verify `[FC] online=1`.
 - [ ] Only after the diagnostic link is stable, integrate read-only FC telemetry into Web MVP.
@@ -124,6 +128,118 @@ Success criteria:
 - MSP request direction remains `$M<`; FC reply direction remains `$M>`.
 - No ESP32 motor/arming/control-write functions are enabled during bring-up.
 - UART6 is reserved for receiver use or left unused during bench testing.
+
+## Replacement FC Ready Prep
+
+Goal: prepare wiring guidance, firmware build targets, and safety gates so the replacement FC can be wired, configured, and validated quickly after it arrives.
+
+Status:
+
+- [x] Inspect the user's ESC photo at `D:\Vitual C\virtual desktop\微信图片_20260704225613_218_125.jpg`; verified a transparent-heatshrink ESC with white/red/black servo-style plug, independent thick red/black power input, and three thick motor phase leads, so arrival docs now treat it as ordinary PWM/OneShot while keeping the red wire/BEC subject to meter confirmation.
+- [x] Document that ESC signal outputs go to the FC motor outputs, not to ESP32-S3.
+- [x] Create `replacement_fc_ready_workflow.md` with ESC wiring, MC6C receiver plan, UART3 MSP, Betaflight setup, and no-prop validation order.
+- [x] Keep default `esp32-s3-unified-web` simulation/Web only.
+- [x] Add future-only `esp32-s3-unified-web-fc-ready` PlatformIO environment.
+- [x] Add runtime real-FC safety gates: FC online, FC armed, MC6C CH6/AUX2 high.
+- [x] Harden `FCBridge` so stale `overrideRC` output is not repeated unless the internal assist gate is open and the output was refreshed recently.
+- [x] Expose FC-ready gate status to Web/JSON: real MSP online, armed, CH6/AUX2 permission, and output locked/releasable.
+- [x] Expose MC6C CH1-CH6 values to Web/JSON for replacement-FC receiver verification.
+- [x] Add MC6C receiver readiness checks: 6 channels present, roll/pitch/yaw centered, throttle low, CH5/CH6 valid.
+- [x] Add MC6C direction self-test wizard for baseline, AIL left/right, ELE forward/back movement, THR high, RUD left/right, and CH5/CH6 high checks.
+- [x] Disable ESP32 arm/disarm API by default; MC6C/Betaflight remains the arming authority.
+- [x] Correct MSP_STATUS armed parsing to use mode flags bit 0.
+- [x] Correct Betaflight MSP RC order for real output/telemetry: roll, pitch, yaw, throttle, AUX1, AUX2.
+- [x] Document that FC-ready real assist requires Betaflight MSP Override on CH6/AUX2, not only UART3 MSP.
+- [x] Clarify MC6C setup: UAV mode, V-TAIL/ELEVON mixing off, reverse only after Receiver/model-preview checks.
+- [x] Expose FC-ready output/MSP diagnostics in Web/JSON: request counts, send success/fail, gate/stale blocks, last RC values, and MSP TX/RX/timeout/error counters.
+- [x] Make FC-ready last-output diagnostics report the packed/clamped Betaflight RAW_RC values that would actually be sent.
+- [x] Route Web direction requests into `FCBridge` before runtime gating so closed-gate attempts are visible as gate blocks instead of disappearing silently.
+- [x] Preserve live MC6C throttle/AUX values in FC-ready `MSP_SET_RAW_RC` requests; ESP32 assist only changes roll/pitch/yaw intent.
+- [x] Host-test FC-ready assist output composition so roll/pitch/yaw can change while MC6C throttle, AUX1/ARM, and AUX2 permission are preserved.
+- [x] Host-test the Web direction -> FC-ready RAW_RC path so webpage throttle/up/down remains simulation-only and real throttle/AUX stay MC6C-controlled.
+- [x] Host-test that Web takeover/pause and stale Web direction input leave the manual controller in neutral-hold and do not queue real FC override output.
+- [x] Expose FC-ready last output as six values `R/P/Y/T/A1/A2` in Web/JSON so bench screenshots can prove AUX/throttle preservation.
+- [x] Clarify Web direction UI and replacement-FC docs: webpage throttle/up/down is simulation-only; real FC-ready throttle remains MC6C-controlled.
+- [x] Keep FC-ready Web responsive during UART bring-up: offline MSP probing is low-rate, and online polling reads at most one data block per loop.
+- [x] Add host-tested FC-ready helpers for Betaflight RAW_RC ordering and CH6 assist-gate logic.
+- [x] Make MC6C ELE-forward self-test movement-based and require Betaflight model-preview confirmation instead of assuming one fixed PWM direction.
+- [x] Add MC6C receiver-output type triage so serial/SBUS/PPM/iBUS and 6-channel PWM receivers do not get miswired during replacement-FC bring-up.
+- [x] Align `FCOutput` field declaration order with Betaflight functional order to reduce future yaw/throttle mix-up risk.
+- [x] Add a compile-time `ENABLE_REAL_FC_OUTPUT` block inside `FCBridge::update()` so non-FC-ready builds cannot call `MSP_SET_RAW_RC` even if a legacy module queues output.
+- [x] Sanitize abnormal Web/WS direction inputs so NaN maps to neutral before RC conversion.
+- [x] Move MC6C receiver-readiness evaluation into a host-tested Arduino-free helper.
+- [x] Add host-tested MC6C direction self-test helpers for baseline, AIL left/right, ELE forward/back movement, THR high, RUD left/right, and CH5/CH6 switch-high checks.
+- [x] Add a low-altitude MC6C manual direction acceptance checklist to the replacement-FC workflow.
+- [x] Add `replacement_fc_arrival_checklist.md` as the short field checklist for replacement-FC arrival day.
+- [x] Add and link `replacement_fc_acceptance_log_template.md` so arrival-day checks have a fillable evidence record.
+- [x] Add `replacement_fc_goal_completion_audit.md` so the final MC6C commanded-direction goal has a single evidence audit page.
+- [x] Add `replacement_fc_command_record_card.md` so Betaflight CLI, USB-TTL, PlatformIO, and log-save commands are in one arrival-day card.
+- [x] Add `docs/evidence/replacement_fc/README.md` so arrival-day screenshots, logs, videos, and pass criteria have one evidence-package index.
+- [x] Add `mc6c_transmitter_setup_card.md` so MC6C UAV mode, V-TAIL/ELEVON off, channel direction checks, CH5/CH6 roles, and receiver-output type triage are available as a short field card.
+- [x] Add MC6C `AETR1234` Channel Map first-candidate guidance and require the final actual Betaflight map to be recorded from Receiver-page proof.
+- [x] Add `replacement_fc_motor_direction_card.md` so M1-M4 physical position, rotation direction, prop direction, and flip/yaw failure recovery are recorded before low-altitude direction acceptance.
+- [x] Add `replacement_fc_field_one_page.md` as the first page to use on replacement-FC arrival day for ESC wiring, MC6C setup, UART3 MSP, no-prop checks, failsafe, and low-altitude manual direction acceptance.
+- [x] Clarify the Web MC6C direction self-test and field docs: no props, preferably USB-only/no动力电池, and CH5 high is only a Receiver/AUX1 movement check if CH5 is ARM.
+- [x] Make `rxBenchReady` require CH5/AUX1 low and CH6/AUX2 low as the default no-prop bench baseline; high switch positions are verified only during self-test.
+- [x] Harden the legacy `MotorController` stub so ESP32-side motor arm/throttle calls remain no-ops.
+- [x] Gate legacy `FollowController` real-FC output behind `ENABLE_LEGACY_FOLLOW_FC_OUTPUT=0` by default so old PID modes cannot queue RC override during MC6C bring-up.
+- [x] Narrow MSP write access: `FCBridge` exposes only read-only MSP diagnostics, `MSP::sendCommand()` is private, and `MSP::setRawRC()` / `MSP::sendArmCommand()` are compile-time guarded.
+- [x] Add `scripts/run_host_tests.ps1` so all host-side MC6C/FC-ready safety tests run from one command.
+- [x] Add `scripts/run_replacement_fc_software_checks.ps1` so host tests and the four replacement-FC software builds run from one safe command.
+- [x] Add and repair `scripts/run_replacement_fc_static_checks.ps1` so default env, safety macros, MSP write narrowing, conditional ESC evidence, and low-altitude evidence fields are checked without upload/serial/motor actions.
+- [x] Extend the static checks so the goal audit, arrival checklist, and field one-page cannot silently drop the "real flight goal needs replacement-FC hardware evidence / ESP32 never connects to ESC signal / first manual flight keeps CH6 low" boundaries.
+- [x] Extend the static checks so host/software check scripts cannot silently grow PlatformIO upload targets, upload-port usage, or serial monitor commands.
+- [x] Extend the static checks so `ENABLE_REAL_FC_OUTPUT=1` can appear only in the future-only `esp32-s3-unified-web-fc-ready` PlatformIO environment.
+- [x] Extend the static checks so no PlatformIO environment can enable ESP32 arm/disarm or legacy FollowController real FC output during replacement-FC bring-up.
+- [x] Extend the static checks so default `esp32-s3-unified-web` cannot compile FC bridge/MSP sources, while FC-ready must compile them explicitly.
+- [x] Run host manual-control test.
+- [x] Sequentially build `esp32-s3-unified-web`.
+- [x] Sequentially build `esp32-s3-unified-web-fc-ready`.
+- [x] Sequentially build `esp32-s3-fc-diag`.
+- [x] Sequentially build `esp32-s3-fc-uart-probe`.
+- [x] Re-run the full replacement-FC software check after bidirectional MC6C self-test coverage.
+- [ ] After replacement FC arrives, run `replacement_fc_ready_workflow.md` from the top with props removed.
+
+Success criteria:
+
+- Current damaged FC remains untouched for motor/arming/MSP-write work.
+- Default firmware remains safe for current ESP32 Web/sensor/simulation use.
+- FC-ready firmware compiles but is reserved for post-replacement, no-prop validated bring-up.
+- Every `MSP_SET_RAW_RC` path is gated by both compile-time and runtime conditions.
+- FCBridge does not expose a mutable MSP object to other modules; diagnostics stay read-only and MSP writes stay inside explicit gated APIs.
+- Legacy autonomous follow PID output is disabled by default; the MC6C manual direction gate remains the first real flight authority.
+- `MSP_SET_RAW_RC` payload uses Betaflight internal AERT order after channel mapping: roll, pitch, yaw, throttle, then AUX channels.
+- Host tests prove FC-ready assist output preserves live MC6C throttle, AUX1, and AUX2 values instead of overwriting pilot authority.
+- Host tests prove Web direction/throttle input can drive simulation while FC-ready real `MSP_SET_RAW_RC` still preserves MC6C throttle, AUX1/ARM, and AUX2/CH6.
+- Host tests prove Web takeover/pause and stale Web direction input do not continue queuing real FC override output, preserving MC6C/flight-controller takeover semantics.
+- A single host-test command exists for regression checks: `powershell -ExecutionPolicy Bypass -File scripts\run_host_tests.ps1`.
+- A single replacement-FC software check command exists and performs no upload: `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1`.
+- A static replacement-FC safety check command exists and performs no upload: `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_static_checks.ps1`.
+- The static safety check guards against documentation drift that would overclaim goal completion before replacement-FC hardware evidence exists.
+- The static safety check guards against software-check script drift that would upload firmware or open a serial monitor during a supposedly no-hardware verification run.
+- The static safety check guards against PlatformIO environment drift that would compile real FC output into the default or diagnostic firmware by mistake.
+- Replacement-FC workflow must require Betaflight MSP Override to be configured on CH6/AUX2 before any real ESP32 assist-output test.
+- Web telemetry can prove MC6C CH1-CH6 movement and the CH6/AUX2 assist permission state after MSP is online.
+- Web telemetry can explicitly tell whether the receiver state is ready for no-prop bench checks.
+- MC6C receiver readiness is host-tested for missing channels, off-center sticks, non-low throttle, and mid-position AUX switches.
+- Web page can guide a step-by-step bidirectional MC6C direction self-test and report reversed/non-moving channels; the matching baseline/step rules are mirrored in host-tested helpers.
+- Replacement-FC workflow includes a post-no-prop, low-altitude manual acceptance gate proving throttle, roll, pitch, and yaw directions under MC6C control before any ESP32 real assist output.
+- Replacement-FC workflow requires M1-M4 motor order, rotation direction, prop direction, and failsafe evidence before any low-altitude manual direction acceptance.
+- A dedicated MC6C setup card exists so the transmitter can be set to UAV/no-mixing/known CH5-CH6 roles before Receiver, motor, and low-altitude direction acceptance.
+- A short arrival-day checklist exists so the user can run the wiring, Receiver, Motors, failsafe, low-altitude manual, and FC-ready gates without searching the full workflow.
+- A one-page field sheet exists so the user can wire the verified ordinary three-wire ESC photo pattern: thick battery leads, three motor phase wires, and white/red/black servo-style control plug; the red wire/BEC still needs meter confirmation and must not be paralleled across all ESCs.
+- MC6C direction self-test UI and docs clearly warn that throttle-high and CH5-high checks are receiver checks only, not arming, motor, prop, or flight permission.
+- Web receiver readiness does not show bench-ready while CH5/AUX1 or CH6/AUX2 is high; the default baseline before bench work is low throttle plus CH5/CH6 low.
+- The arrival-day checklist and workflow point to a fillable acceptance log template, and manual direction proof is not considered complete without evidence paths or notes.
+- A final goal-completion audit exists so code/build success is not confused with real MC6C commanded-direction flight evidence.
+- A command record card exists so arrival-day CLI, USB-TTL, upload, monitor, and log-save commands are not reconstructed from memory.
+- The evidence directory documents the exact screenshots, logs, and videos needed before manual direction acceptance or FC-ready assist can be treated as proven.
+- A dedicated Betaflight setup card exists so UART3 MSP, receiver input, Channel Map, Modes, Motors, and failsafe are configured without relying on memory or blind `diff all` pasting.
+- A low-altitude manual direction troubleshooting card exists so first-flight symptoms route back to Receiver, model preview, board alignment, motor order, motor direction, prop direction, or failsafe checks instead of ESP32 compensation.
+- FC-ready RAW_RC packing clamps all outgoing RC values to 1000-2000 at the final MSP packing boundary.
+- Web telemetry can distinguish "Web requested output", "FCBridge blocked output", "MSP write failed", and "FC/MSP link is not replying" during replacement-FC bench bring-up.
+- Web telemetry last-output fields report packed/clamped RAW_RC values, so arrival-day screenshots reflect actual Betaflight-bound channel values.
+- Web/WS direction input cannot produce undefined RC mapping from NaN values; malformed axes fall back to neutral before limiting.
 
 ## OV5640/OV2640 Camera No-Image Bug Plan
 

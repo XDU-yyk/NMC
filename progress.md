@@ -519,3 +519,541 @@
     - refreshing that URL shows the current live frame each time;
     - follow-up `/status?fresh=jpg1` showed `fw=camdiag-20260704-recover2`, `camera=true`, `valid=true`, `frames=947`, `fps=5`, `errors=0`, `cache=3051`, `cap=3051`, `stations=1`, `http=29`, `jpg=12`, `stat=3`, `timeouts=0`, `bad=0`, and `age=179`;
     - this closes the image-path bug: camera capture, cached JPEG delivery, AP client access, and status diagnostics are all working.
+  - 2026-07-04 replacement-FC-ready preparation:
+    - initial replacement-FC wiring pass treated the ESC as an ordinary three-wire servo-plug PWM/OneShot-style ESC; this was later confirmed by the user-provided ESC photo, while the red wire/BEC remains subject to meter confirmation;
+    - wrote `replacement_fc_ready_workflow.md` with wiring, MC6C receiver/channel plan, UART3 MSP, Betaflight setup, no-prop motor checks, and firmware usage;
+    - added `REAL_FC_ASSIST_AUX_CHANNEL=6`, `REAL_FC_ASSIST_AUX_MIN=1700`, and `REAL_FC_OUTPUT_HOLD_MS=120` to `include/config.h`;
+    - added `esp32-s3-unified-web-fc-ready` in `platformio.ini` with `ENABLE_REAL_FC_OUTPUT=1` and FC bridge/MSP sources;
+    - hardened `src/unified_web_main.cpp` so real output is cleared unless manual direction control is active, the FC gate is open, and the command is not neutral-hold;
+    - hardened `src/comm/fc_bridge.cpp/.h` so `MSP_SET_RAW_RC` is internally gated by FC online, armed state, MC6C CH6/AUX2 high, and recent output refresh;
+    - ran `g++ -std=c++17 -I src test\test_manual_control.cpp src\control\manual_control.cpp -o .pio\build\manual_control_test.exe; .pio\build\manual_control_test.exe`;
+    - result: `20 通过, 0 失败`;
+    - ran `C:\Users\yyk\.platformio\penv\Scripts\platformio.exe run -e esp32-s3-unified-web --disable-auto-clean`;
+    - result: `SUCCESS`, RAM 16.0%, Flash 26.3%;
+    - ran `C:\Users\yyk\.platformio\penv\Scripts\platformio.exe run -e esp32-s3-unified-web-fc-ready --disable-auto-clean`;
+    - result: `SUCCESS`, RAM 16.0%, Flash 26.4%;
+    - no upload was performed for FC-ready firmware because the current FC is damaged and the target is reserved for replacement-FC bring-up.
+  - 2026-07-04 FC-ready RC/gate visibility continuation:
+    - added Web/JSON telemetry fields for `rcAux1`, `rcAux2`, `rcChannelCount`, `fcAssistSwitch`, `fcAssistGateOpen`, `fcRealOutputCompiled`, and `fcRealOnline`;
+    - updated the unified Web page to display MC6C CH1-CH6 plus a FC-ready gate line showing real MSP online/offline, armed yes/no, CH6 permission high/low, and output locked/releasable;
+    - updated `fillTelemetry()` so `ENABLE_REAL_FC_OUTPUT` builds overlay real MSP attitude, battery, armed state, cycle time, and RC channels when `fcBridge.isOnline()` is true;
+    - kept simulation available when real FC is offline, but now `fcRealOnline=false` and `fcAssistGateOpen=false` are explicit in JSON/UI;
+    - made `FCBridge::isAssistGateOpen()` public for read-only telemetry;
+    - changed `FCBridge::arm()` and `FCBridge::disarm()` to default blocked no-ops unless `ENABLE_ESP32_ARM_DISARM=1`;
+    - corrected `MSP::readStatus()` armed parsing to use `MSP_STATUS` mode flags bit 0 rather than payload index 12;
+    - updated `replacement_fc_ready_workflow.md` with the new FC-ready Web checks;
+    - reran host manual-control test: `20 通过, 0 失败`;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.3%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.0%, Flash 26.4%;
+    - rebuilt `esp32-s3-fc-diag`: `SUCCESS`, RAM 5.8%, Flash 8.1%;
+    - rebuilt `esp32-s3-fc-uart-probe`: `SUCCESS`, RAM 5.7%, Flash 8.0%;
+    - no upload was performed.
+  - 2026-07-04 MC6C receiver readiness continuation:
+    - added receiver sanity thresholds to `include/config.h`: center 1400-1600, low <=1200, high >=1700;
+    - added Web/JSON fields `rxHasSixChannels`, `rxCenterOk`, `rxThrottleLow`, `rxAux1Valid`, `rxAux2Valid`, and `rxBenchReady`;
+    - updated `unified_web_main.cpp` to compute receiver readiness only from real MSP RC data;
+    - updated the Web page with a `MC6C 接收机检查` card that says either `可继续无桨台架检查`, `暂不继续`, or waits for real MSP;
+    - updated `replacement_fc_ready_workflow.md` to explain that this readiness result is only for no-prop bench checks, not flight;
+    - reran host manual-control test: `20 通过, 0 失败`;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.4%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.0%, Flash 26.5%;
+    - rebuilt `esp32-s3-fc-diag`: `SUCCESS`, RAM 5.8%, Flash 8.1%;
+    - rebuilt `esp32-s3-fc-uart-probe`: `SUCCESS`, RAM 5.7%, Flash 8.0%;
+    - no upload was performed.
+  - 2026-07-04 MC6C direction self-test continuation:
+    - added a Web-only `MC6C 方向自检` wizard under the receiver card;
+    - wizard requires real MSP online, records a safe baseline, then asks for AIL right, ELE forward, THR high, RUD right, CH5 high, and CH6 high;
+    - each step compares channel movement against the baseline and reports pass/fail with values and delta;
+    - updated `replacement_fc_ready_workflow.md` to use the wizard and to fix direction mistakes in Betaflight Channel Map or MC6C servo reverse switches, not ESP32 code.
+  - 2026-07-04 FC-ready final verification after MC6C direction wizard:
+    - session catchup reported unsynced continuation context, then `git diff --stat`, `task_plan.md`, `findings.md`, and `progress.md` were re-read before verification;
+    - the referenced ESC photo path was not found on disk in this session; this was later superseded when the user provided the photo and the wiring conclusion was confirmed: ESC signal/GND go to FC motor outputs, not ESP32;
+    - confirmed `replacement_fc_ready_workflow.md` reads correctly as UTF-8 and contains Chinese wiring and validation guidance;
+    - reran host manual-control test: `20 通过, 0 失败`;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.5%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.0%, Flash 26.6%;
+    - rebuilt `esp32-s3-fc-diag`: `SUCCESS`, RAM 5.8%, Flash 8.1%;
+    - rebuilt `esp32-s3-fc-uart-probe`: `SUCCESS`, RAM 5.7%, Flash 8.0%;
+    - source audit confirmed the real-output path remains locked by compile-time `ENABLE_REAL_FC_OUTPUT`, runtime FC online/armed state, MC6C CH6/AUX2 threshold, and fresh output timing;
+    - no firmware upload was performed, because the current FC is damaged and FC-ready firmware is reserved for replacement-FC, no-prop bring-up.
+  - 2026-07-04 Betaflight MSP RC order correction:
+    - audited the FC-ready real-output path against Betaflight source semantics;
+    - found that Betaflight MSP RC order is `roll, pitch, yaw, throttle, AUX1, AUX2...`, while the local bridge had been treating slots 2/3 as `throttle/yaw`;
+    - fixed `FCBridge::sendRawRC()` so `MSP_SET_RAW_RC` sends roll, pitch, yaw, throttle, AUX1, AUX2, and initializes unused AUX slots to neutral 1500 instead of zero;
+    - fixed `unified_web_main.cpp` real MSP telemetry mapping so yaw and throttle are read from the correct Betaflight slots;
+    - updated the Web page to label values by function name instead of raw `CH3/CH4`, reducing confusion between MC6C physical channels and Betaflight internal MSP order;
+    - updated `replacement_fc_ready_workflow.md` with an explicit note about MC6C physical channel labels versus Betaflight MSP internal order;
+    - updated `findings.md` and `task_plan.md` with the correction and success criterion;
+    - reran host manual-control test: `20 通过, 0 失败`;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.5%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.0%, Flash 26.6%;
+    - rebuilt `esp32-s3-fc-diag`: `SUCCESS`, RAM 5.8%, Flash 8.1%;
+    - rebuilt `esp32-s3-fc-uart-probe`: `SUCCESS`, RAM 5.7%, Flash 8.0%;
+    - no upload was performed; the current FC is still treated as damaged.
+  - 2026-07-04 FC-ready output diagnostics continuation:
+    - wired `FCBridge::getOutputDiag()` and `MSP::getDiag()` into unified Web telemetry for FC-ready builds;
+    - added JSON fields for output request counts, raw RC send OK/fail counts, gate/stale blocks, last output ages, last RC values, MSP TX/RX counters, MSP timeout count, and last MSP error;
+    - added compact Chinese output/MSP diagnostic lines under the Web `FC-ready 门槛` card;
+    - updated `replacement_fc_ready_workflow.md` with how to interpret `输出诊断` and `MSP诊断` during no-prop replacement-FC bring-up;
+    - updated `task_plan.md` and `findings.md` so replacement-FC bring-up can use the Web page to locate whether output is blocked by Web, FCBridge, MSP write, or FC link response.
+  - 2026-07-04 Betaflight MSP Override gate continuation:
+    - audited Betaflight MSP RX/override source behavior;
+    - found that receiving `MSP_SET_RAW_RC` is not enough for an existing receiver setup: Betaflight MSP override uses MSP samples only when `BOXMSPOVERRIDE` is active, the channel is included in `msp_override_channels_mask`, and the MSP channel sample is fresh;
+    - updated `replacement_fc_ready_workflow.md` to require MC6C UAV mode, V-TAIL/ELEVON mixing off, and direction/reverse checks through Receiver/model preview;
+    - added a dedicated MSP Override section: configure MSP Override on AUX2/CH6 high, do not override ARM, and verify only with props removed;
+    - updated `include/config.h` comments to list Betaflight MSP Override configuration as a precondition for `ENABLE_REAL_FC_OUTPUT`;
+    - changed Web UI wording from `手柄接管` to `暂停网页控制`, because that button only stops Web-originated direction output and hands control back to MC6C/FC;
+    - updated matching comments in `manual_control`, `unified_web_main`, and `web/server`;
+    - updated `findings.md` and `task_plan.md` with the MSP Override gate;
+    - reran host manual-control test: `20 通过, 0 失败`;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.5%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.0%, Flash 26.6%;
+    - rebuilt `esp32-s3-fc-diag`: `SUCCESS`, RAM 5.8%, Flash 8.1%;
+    - rebuilt `esp32-s3-fc-uart-probe`: `SUCCESS`, RAM 5.7%, Flash 8.0%;
+    - no upload was performed; the current FC is still treated as damaged.
+  - 2026-07-05 FC-ready gate observability continuation:
+    - moved final real-output gate observability into `FCBridge::update()` instead of dropping requests in `unified_web_main.cpp` before the bridge sees them;
+    - `FCBridge::setOutput()` now queues requests and records `queued/clear`; `update()` remains the single 50Hz send/block path;
+    - closed-gate direction attempts now increment `gateBlocks`, making FC offline/unarmed/CH6-low conditions visible during replacement-FC bench bring-up;
+    - FC-ready real-output requests now preserve live MC6C throttle, AUX1, and AUX2 values from MSP RC data, while ESP32 assist only supplies roll/pitch/yaw direction intent;
+    - repeated clear spam was reduced by clearing real output only once after an active output request ends;
+    - `git diff --check` passed;
+    - host manual-control test passed: `20 通过, 0 失败`;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.6%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.1%, Flash 26.7%;
+    - rebuilt `esp32-s3-fc-diag`: `SUCCESS`, RAM 5.8%, Flash 8.1%;
+    - rebuilt `esp32-s3-fc-uart-probe`: `SUCCESS`, RAM 5.7%, Flash 8.0%;
+    - no firmware upload was performed; the current FC is still treated as damaged.
+  - 2026-07-05 FC-ready MSP polling responsiveness continuation:
+    - audited `FCBridge::update()` during the completion check for replacement-FC bring-up;
+    - found that offline UART/MSP faults could trigger several timeout waits in one loop iteration, making the unified dashboard sluggish exactly when UART diagnostics are needed most;
+    - changed offline behavior to low-rate `MSP_STATUS` probing;
+    - changed online behavior to read at most one due MSP data block per `update()` call, prioritizing status and RC input before attitude/battery polling;
+    - kept output gate/block handling after the poll step so Web direction attempts still show `gateBlocks` when FC online/armed/CH6 conditions are not met;
+    - `git diff --check` passed;
+    - host manual-control test passed: `20 通过, 0 失败`;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.6%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.1%, Flash 26.7%;
+    - rebuilt `esp32-s3-fc-diag`: `SUCCESS`, RAM 5.8%, Flash 8.1%;
+    - rebuilt `esp32-s3-fc-uart-probe`: `SUCCESS`, RAM 5.7%, Flash 8.0%;
+    - no firmware upload was performed; the current FC is still treated as damaged.
+  - 2026-07-05 FC-ready host-testable RC mapping continuation:
+    - identified that Betaflight RAW_RC slot order and CH6 assist gate were safety-critical but not directly host-tested;
+    - added `src/comm/fc_rc_mapping.h` as an Arduino-free helper for RAW_RC packing and assist-gate checks;
+    - changed `FCBridge::sendRawRC()` to use that helper for roll, pitch, yaw, throttle, AUX1, AUX2 ordering;
+    - changed `FCBridge::isAssistGateOpen()` to use the same helper for online/armed/CH6/channel-count checks;
+    - added `test/test_fc_ready_logic.cpp` to lock RAW_RC slot order, neutral unused channels, and CH6 gate failure modes;
+    - `git diff --check` passed;
+    - host manual-control test passed: `20 通过, 0 失败`;
+    - host FC-ready logic test passed: `14 passed, 0 failed`;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.6%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.1%, Flash 26.7%;
+    - rebuilt `esp32-s3-fc-diag`: `SUCCESS`, RAM 5.8%, Flash 8.1%;
+    - rebuilt `esp32-s3-fc-uart-probe`: `SUCCESS`, RAM 5.7%, Flash 8.0%;
+    - no firmware upload was performed; the current FC is still treated as damaged.
+  - 2026-07-05 MC6C ELE self-test completion:
+    - session catchup reported the previous in-progress handoff and the need to document the ELE direction adjustment;
+    - attempted to open `D:/Vitual C/virtual desktop/微信图片_20260704225613_218_125.jpg`, but the file was not present at that path in this session; later user-provided evidence superseded this and confirmed the ordinary PWM/OneShot ESC pattern;
+    - re-read `AGENTS.md`, `PROJECT_HANDOFF_2026-07-03.md`, `replacement_fc_ready_workflow.md`, `task_plan.md`, `findings.md`, and `progress.md`;
+    - confirmed `src/web/index_html.h` uses `expect:'any'` for `ELE 前`, so the Web wizard only requires significant CH2 movement and tells the user to confirm final pitch direction in Betaflight model preview;
+    - confirmed `replacement_fc_ready_workflow.md` already documents the same ELE-forward rule;
+    - appended the rationale to `findings.md`;
+    - next action is to rerun diff checks, host tests, and the four relevant PlatformIO builds without uploading FC-ready firmware.
+  - 2026-07-05 replacement-FC-ready verification rerun:
+    - `git diff --check` passed; only LF/CRLF warnings were printed;
+    - host manual-control test passed: `20 通过, 0 失败`;
+    - host FC-ready logic test passed: `14 passed, 0 failed`;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.6%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.1%, Flash 26.7%;
+    - rebuilt `esp32-s3-fc-diag`: `SUCCESS`, RAM 5.8%, Flash 8.1%;
+    - rebuilt `esp32-s3-fc-uart-probe`: `SUCCESS`, RAM 5.7%, Flash 8.0%;
+    - no firmware upload was performed; current FC remains treated as damaged and FC-ready is reserved for replacement-FC no-prop bring-up.
+  - 2026-07-05 receiver-type and channel-order hardening:
+    - audited current `AGENTS.md`, `replacement_fc_ready_workflow.md`, `task_plan.md`, `FCBridge`, `ManualController`, `fc_rc_mapping`, and host tests against the active MC6C replacement-FC goal;
+    - codegraph MCP was unavailable (`Transport closed`), so the audit used current files and tests as authoritative evidence;
+    - added a receiver-output type triage to `replacement_fc_ready_workflow.md`: serial/SBUS/PPM/iBUS receiver versus 6-channel PWM receiver, plus Receiver-page no-movement checks;
+    - updated the shortest arrival-day checklist so receiver output type is confirmed before ESC/motor steps;
+    - reordered `FCOutput` declaration to `roll, pitch, yaw, throttle, AUX1, AUX2`, matching Betaflight functional order;
+    - changed the `RcChannels` comment so it no longer implies unsafe struct-layout compatibility with `FCOutput`;
+    - updated `task_plan.md` and `findings.md` with the new receiver triage and channel-order cleanup.
+  - 2026-07-05 receiver-type hardening verification:
+    - `git diff --check` passed; only LF/CRLF warnings were printed;
+    - host manual-control test passed: `20 通过, 0 失败`;
+    - host FC-ready logic test passed: `14 passed, 0 failed`;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.6%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.1%, Flash 26.7%;
+    - rebuilt `esp32-s3-fc-diag`: `SUCCESS`, RAM 5.8%, Flash 8.1%;
+    - rebuilt `esp32-s3-fc-uart-probe`: `SUCCESS`, RAM 5.7%, Flash 8.0%;
+    - no firmware upload was performed.
+  - 2026-07-05 direction-input and receiver-readiness hardening:
+    - codegraph MCP was attempted first but still failed with `Transport closed`, so current source/tests were used as authority;
+    - added NaN sanitization in `manual_control.cpp` so malformed Web/WS direction axes become neutral before RC mapping;
+    - added `MC6CReceiverReadiness` and `evaluateMC6CReceiverReadiness()` to `src/comm/fc_rc_mapping.h`;
+    - changed `unified_web_main.cpp` to use the shared receiver-readiness helper for Web telemetry;
+    - expanded `test/test_manual_control.cpp` with NaN/Infinity direction input checks;
+    - expanded `test/test_fc_ready_logic.cpp` with receiver-readiness success/failure checks;
+    - `git diff --check` passed; only LF/CRLF warnings were printed;
+    - host manual-control test passed: `23 passed, 0 failed`;
+    - host FC-ready logic test passed: `23 passed, 0 failed`;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.6%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.1%, Flash 26.7%;
+    - rebuilt `esp32-s3-fc-diag`: `SUCCESS`, RAM 5.8%, Flash 8.1%;
+    - rebuilt `esp32-s3-fc-uart-probe`: `SUCCESS`, RAM 5.7%, Flash 8.0%;
+    - no firmware upload was performed; current FC remains treated as damaged.
+  - 2026-07-05 FCBridge compile-time output gate:
+    - session catchup reported the previous continuation context, then `task_plan.md`, `findings.md`, `progress.md`, and `platformio.ini` were re-read;
+    - audited all `fcBridge.setOutput()`, `sendRawRC()`, `MSP_SET_RAW_RC`, and `sendArmCommand()` references;
+    - found that `FCBridge::update()` should enforce `ENABLE_REAL_FC_OUTPUT` itself, not rely only on build filters or callers;
+    - added a compile-time guard around the only `sendRawRC()` call;
+    - when `ENABLE_REAL_FC_OUTPUT=0`, queued override output now records `compile_gate` and does not call `MSP::setRawRC()`;
+    - updated `src/comm/fc_bridge.h`, `task_plan.md`, and `findings.md` with the lower-level gate behavior.
+  - 2026-07-05 FCBridge compile-time gate verification:
+    - `git diff --check` passed; only LF/CRLF warnings were printed;
+    - host manual-control test passed: `20 通过, 0 失败`;
+    - host FC-ready logic test passed: `14 passed, 0 failed`;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.6%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.1%, Flash 26.7%;
+    - rebuilt `esp32-s3-fc-diag`: `SUCCESS`, RAM 5.8%, Flash 8.1%;
+    - rebuilt `esp32-s3-fc-uart-probe`: `SUCCESS`, RAM 5.7%, Flash 8.0%;
+    - no firmware upload was performed.
+  - 2026-07-05 MC6C direction self-test host coverage:
+    - expanded `test/test_fc_ready_logic.cpp` to cover `evaluateMC6CDirectionBaseline()` success and failure cases;
+    - added host checks for AIL right, ELE forward movement in either numeric direction, THR high, RUD right, CH5 high, CH6 high, missing channels, and invalid channel indices;
+    - updated `replacement_fc_ready_workflow.md`, `task_plan.md`, and `findings.md` so future agents know the direction self-test rules are host-tested;
+    - host FC-ready logic test passed locally after the edit: `48 passed, 0 failed`;
+    - no firmware upload was performed.
+  - 2026-07-05 MC6C direction self-test verification:
+    - `git diff --check` passed; only LF/CRLF warnings were printed;
+    - host manual-control test passed: `23 passed, 0 failed`;
+    - host FC-ready logic test passed: `48 passed, 0 failed`;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.6%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.1%, Flash 26.7%;
+    - rebuilt `esp32-s3-fc-diag`: `SUCCESS`, RAM 5.8%, Flash 8.1%;
+    - rebuilt `esp32-s3-fc-uart-probe`: `SUCCESS`, RAM 5.7%, Flash 8.0%;
+    - no firmware upload was performed; FC-ready remains reserved for replacement-FC no-prop bring-up.
+  - 2026-07-05 MC6C manual direction acceptance gate:
+    - audited `replacement_fc_ready_workflow.md` against the active goal that MC6C must make the aircraft fly in commanded directions;
+    - added `4.1 低空手动方向验收` with prerequisites, expected throttle/AIL/ELE/RUD behavior, pass criteria, and stop conditions;
+    - updated `task_plan.md` and `findings.md` to record the new post-no-prop manual acceptance gate;
+    - no code or firmware upload was performed.
+  - 2026-07-05 replacement-FC arrival checklist:
+    - added `replacement_fc_arrival_checklist.md` as a short field checklist for new-FC arrival day;
+    - linked the checklist from `replacement_fc_ready_workflow.md`;
+    - updated `task_plan.md` and `findings.md` to record the short checklist;
+    - no code or firmware upload was performed.
+  - 2026-07-05 replacement-FC acceptance log template:
+    - added `replacement_fc_acceptance_log_template.md` as the fillable arrival-day evidence record;
+    - linked the template from `replacement_fc_ready_workflow.md` and `replacement_fc_arrival_checklist.md`;
+    - updated `task_plan.md` and `findings.md` so manual direction acceptance requires recorded notes and evidence paths before FC-ready real assist is considered;
+    - attempted to view the referenced ESC photo path again, but the file was not present at `D:/Vitual C/virtual desktop/微信图片_20260704225613_218_125.jpg`; later user-provided evidence confirmed the ordinary three-wire PWM/OneShot-style wiring assumption.
+    - no code or firmware upload was performed.
+  - 2026-07-05 replacement-FC current-state verification:
+    - codegraph MCP was attempted for the current FC-ready audit but failed with `Transport closed`, so current source, tests, docs, and build output were used as authority;
+    - source audit confirmed default `esp32-s3-unified-web` does not compile `comm/fc_bridge.cpp` or `comm/msp.cpp`, while `esp32-s3-unified-web-fc-ready` is the future-only real-FC build with `ENABLE_REAL_FC_OUTPUT=1`;
+    - source audit confirmed `FCBridge::update()` still gates the only `MSP_SET_RAW_RC` path by compile-time output enable plus runtime FC online, armed state, MC6C CH6/AUX2 high, and fresh Web direction heartbeat;
+    - host manual-control test passed: `23 通过, 0 失败`;
+    - host FC-ready logic test passed: `48 passed, 0 failed`;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.6%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.1%, Flash 26.7%;
+    - rebuilt `esp32-s3-fc-diag`: `SUCCESS`, RAM 5.8%, Flash 8.1%;
+    - rebuilt `esp32-s3-fc-uart-probe`: `SUCCESS`, RAM 5.7%, Flash 8.0%;
+    - no firmware upload was performed; the requested end state still requires replacement FC hardware plus real Receiver, motor-order, failsafe, and low-altitude MC6C direction acceptance evidence.
+  - 2026-07-05 UART3 label cleanup:
+    - changed the active `esp32-s3-fc-uart-probe` PlatformIO comment from UART6 to UART3;
+    - marked the old UART6/R6/T6 finding as historical and superseded by the UART3 R3/T3 migration;
+    - corrected the historical MSP request wording to `$M<` request and `$M>` reply so it no longer contradicts the current UART3 proof workflow.
+  - 2026-07-05 MC6C transmitter setup card:
+    - added `mc6c_transmitter_setup_card.md` as a short field card for the Microzone MC6C transmitter;
+    - card requires UAV mode, V-TAIL/ELEVON off, reverse toggles default-first, CH5 for ARM/mode, CH6 for ESP32 assist permission, and CH6 low during first manual direction flight;
+    - card separates serial/SBUS/PPM/iBUS receiver handling from six-channel PWM receiver handling to avoid miswiring the receiver before Betaflight Receiver-page proof;
+    - linked the card from the replacement-FC workflow, arrival checklist, acceptance log template, task plan, and findings.
+  - 2026-07-05 FC-ready pilot-channel preservation hardening:
+    - audited the `unified_web_main.cpp -> FCBridge -> MSP_SET_RAW_RC` path for the active MC6C replacement-FC goal;
+    - codegraph MCP was attempted first but failed with `Transport closed`, so current source/tests were used as authority;
+    - added `buildAssistOutputPreservingPilotChannels()` to `src/comm/fc_rc_mapping.h`;
+    - changed `unified_web_main.cpp` to use that helper so FC-ready assist changes only roll/pitch/yaw while preserving live MC6C throttle, AUX1/ARM, and AUX2 permission from MSP RC;
+    - updated Web/serial wording from vague `armed` to Betaflight ARM/解锁位;
+    - host manual-control test passed: `23 passed, 0 failed`;
+    - host FC-ready logic test passed: `61 passed, 0 failed`;
+    - `git diff --check` passed; only LF/CRLF warnings were printed;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.6%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.1%, Flash 26.7%;
+    - rebuilt `esp32-s3-fc-diag`: `SUCCESS`, RAM 5.8%, Flash 8.1%;
+    - rebuilt `esp32-s3-fc-uart-probe`: `SUCCESS`, RAM 5.7%, Flash 8.0%;
+  - 2026-07-05 FC-ready acceptance wording alignment:
+    - updated `replacement_fc_ready_workflow.md` so MSP Override is documented as roll/pitch/yaw only, not throttle;
+    - updated `replacement_fc_arrival_checklist.md` and `replacement_fc_acceptance_log_template.md` to say Betaflight ARM位/解锁位 comes from the `MSP_STATUS` ARM active-box bit, not merely CH5 high;
+    - updated the acceptance evidence row to require preserving MC6C throttle, AUX1/ARM, and AUX2/CH6 permission while ESP32 only changes roll/pitch/yaw;
+    - no code, firmware upload, arming, or motor action was performed; current FC remains treated as damaged.
+  - 2026-07-05 FC-ready six-channel output diagnostics:
+    - added AUX1/AUX2 to `FCOutputDiag`, unified telemetry JSON, and the Web FC-ready diagnostic line;
+    - the page now shows `最后RC R/P/Y/T/A1/A2`, making throttle/AUX preservation visible in replacement-FC bench screenshots;
+    - updated `replacement_fc_ready_workflow.md`, `replacement_fc_acceptance_log_template.md`, `task_plan.md`, and `findings.md` with this evidence expectation.
+  - 2026-07-05 FC-ready six-channel diagnostics verification:
+    - host FC-ready logic test passed: `61 passed, 0 failed`;
+    - host manual-control test passed: `23 通过, 0 失败`;
+    - `git diff --check` passed; only LF/CRLF warnings were printed;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.6%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.1%, Flash 26.7%;
+    - rebuilt `esp32-s3-fc-diag`: `SUCCESS`, RAM 5.8%, Flash 8.1%;
+    - rebuilt `esp32-s3-fc-uart-probe`: `SUCCESS`, RAM 5.7%, Flash 8.0%;
+    - no firmware upload, arming, or motor action was performed because the current FC remains damaged.
+  - 2026-07-05 FC-ready Web throttle clarification:
+    - updated the direction panel to label webpage up/down and throttle as simulation-only;
+    - updated the FC-ready gate text to say real output is roll/pitch/yaw only and real throttle remains controlled by MC6C;
+    - updated `replacement_fc_ready_workflow.md`, `replacement_fc_arrival_checklist.md`, `replacement_fc_acceptance_log_template.md`, `task_plan.md`, and `findings.md` with the same rule.
+  - 2026-07-05 FC-ready Web throttle clarification verification:
+    - `git diff --check` passed; only LF/CRLF warnings were printed;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.6%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.1%, Flash 26.7%;
+    - no firmware upload, arming, or motor action was performed because the current FC remains damaged.
+  - 2026-07-05 FC-ready Web output path host test:
+    - added `test/test_fc_ready_web_output_path.cpp`;
+    - the test composes Web direction intent through `mapCommandToChannels()`, `buildAssistOutputPreservingPilotChannels()`, and `buildBetaflightRawRC()`;
+    - it proves webpage throttle/up/down may rise for simulation, but the real FC-ready RAW_RC throttle remains the live MC6C throttle value;
+    - it also proves AUX1/ARM and AUX2/CH6 permission remain MC6C-controlled while ESP32 assist only changes roll/pitch/yaw;
+    - host Web-output-path test passed: `9 passed, 0 failed`;
+    - host FC-ready logic test passed: `61 passed, 0 failed`;
+    - host manual-control test passed: `23 passed, 0 failed`;
+    - rebuilt `esp32-s3-unified-web`: `SUCCESS`, RAM 16.0%, Flash 26.6%;
+    - rebuilt `esp32-s3-unified-web-fc-ready`: `SUCCESS`, RAM 16.1%, Flash 26.7%;
+    - `git diff --check` passed; only LF/CRLF warnings were printed;
+    - no firmware upload, arming, or motor action was performed because the current FC remains damaged.
+  - 2026-07-05 host test runner:
+    - added `scripts/run_host_tests.ps1`;
+    - the script builds and runs `test_manual_control.cpp`, `test_fc_ready_logic.cpp`, and `test_fc_ready_web_output_path.cpp`;
+    - updated `README.md`, `task_plan.md`, and `findings.md` with the one-command host verification entry;
+    - ran `powershell -ExecutionPolicy Bypass -File scripts\run_host_tests.ps1`;
+    - result: manual-control `23 passed, 0 failed`, FC-ready logic `61 passed, 0 failed`, Web-output-path `9 passed, 0 failed`, then `All host tests passed`;
+    - no firmware upload, arming, or motor action was performed.
+  - 2026-07-05 replacement-FC evidence package index:
+    - added `docs/evidence/replacement_fc/README.md`;
+    - the evidence README lists required Betaflight screenshots, CLI snapshot, receiver proof, UART3 MSP logs, no-prop motor/failsafe videos, default Web evidence, low-altitude MC6C manual direction evidence, and later FC-ready no-prop evidence;
+    - linked the evidence README from `replacement_fc_ready_workflow.md` and `replacement_fc_acceptance_log_template.md`;
+    - updated `task_plan.md` and `findings.md` with the evidence-package index;
+    - no firmware upload, arming, or motor action was performed.
+  - 2026-07-05 replacement-FC software check runner:
+    - added `scripts/run_replacement_fc_software_checks.ps1`;
+    - the script first runs `scripts/run_host_tests.ps1`, then sequentially builds `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - updated `README.md`, `task_plan.md`, and `findings.md` with the one-command software-check entry;
+    - the script explicitly states it does not upload firmware, open serial ports, arm, write MSP, or run motors.
+  - 2026-07-05 MC6C Channel Map first-candidate guidance:
+    - added `AETR1234` as the first Betaflight Channel Map candidate for MC6C's physical `CH1 AIL, CH2 ELE, CH3 THR, CH4 RUD` order;
+    - updated `mc6c_transmitter_setup_card.md`, `replacement_fc_ready_workflow.md`, `replacement_fc_arrival_checklist.md`, `replacement_fc_acceptance_log_template.md`, and `docs/evidence/replacement_fc/README.md`;
+    - the docs now require the final actual map to be recorded and proven by Receiver-page evidence;
+    - `AETR1234` is treated as a candidate only, and failed mapping must be fixed in Betaflight Channel Map or MC6C reverse settings, not ESP32 code.
+  - 2026-07-05 MC6C Channel Map guidance verification:
+    - `git diff --check` reported no real whitespace errors, only existing LF/CRLF warnings;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `61 passed, 0 failed`, Web-output-path `9 passed, 0 failed`;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - no firmware upload, serial open, MSP write, arming, or motor action was performed.
+  - 2026-07-05 motor order and prop direction gate:
+    - added `replacement_fc_motor_direction_card.md` for no-prop M1-M4 position, motor rotation, prop direction, and failure-recovery records;
+    - linked the motor card from `replacement_fc_ready_workflow.md`, `replacement_fc_arrival_checklist.md`, `replacement_fc_acceptance_log_template.md`, and `docs/evidence/replacement_fc/README.md`;
+    - expanded the acceptance log so M1-M4 actual position, rotation, and prop direction must be recorded before low-altitude MC6C direction acceptance;
+    - hardened `src/control/motor.h` so the legacy ESP32-side `MotorController` stub cannot report armed or act on arm/throttle calls.
+  - 2026-07-05 motor order gate verification:
+    - `git diff --check` reported no real whitespace errors, only existing LF/CRLF warnings;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `61 passed, 0 failed`, Web-output-path `9 passed, 0 failed`;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - no firmware upload, serial open, MSP write, arming, or motor action was performed.
+  - 2026-07-05 legacy FollowController output gate:
+    - audited all `fcBridge.setOutput()` and `MSP_SET_RAW_RC` paths after hardening the motor/prop gate;
+    - found the older `FollowController` PID path still queued `FCOutput` with its own throttle values, unlike the current FC-ready Web path that preserves MC6C throttle/AUX;
+    - added `ENABLE_LEGACY_FOLLOW_FC_OUTPUT=0` in `include/config.h`;
+    - changed `src/follow/follow.cpp` so legacy follow modes do not queue FC output by default;
+    - updated `src/follow/follow.h`, `task_plan.md`, and `findings.md` with the safety boundary.
+  - 2026-07-05 replacement-FC software recheck and field one-page sheet:
+    - reran `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1`;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `61 passed, 0 failed`, Web-output-path `9 passed, 0 failed`;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - no firmware upload, serial open, MSP write, arming, or motor action was performed;
+    - added `replacement_fc_field_one_page.md` as the first on-site sheet for ordinary three-wire ESC wiring, MC6C UAV/no-mixing setup, UART3 MSP wiring, no-prop motor/failsafe checks, default Web use, and low-altitude MC6C direction acceptance.
+  - 2026-07-05 MC6C direction self-test no-prop warning:
+    - tightened the unified Web MC6C receiver self-test copy so the page says the direction self-test must be no-prop, preferably USB-only/no动力电池;
+    - clarified that CH5 high may be ARM and is used only to confirm Receiver/AUX1 movement during the self-test;
+    - updated `replacement_fc_field_one_page.md` and `replacement_fc_acceptance_log_template.md` with the same no-prop/no-power recommendation;
+    - `git diff --check` reported no real whitespace errors, only existing LF/CRLF warnings;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `61 passed, 0 failed`, Web-output-path `9 passed, 0 failed`;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - no firmware upload, serial open, MSP write, arming, or motor action was performed.
+  - 2026-07-05 MC6C bench baseline requires CH5/CH6 low:
+    - changed `MC6CReceiverReadiness` so `rxBenchReady` now requires CH5/AUX1 low and CH6/AUX2 low, not merely a clear high/low switch extreme;
+    - exposed `rxAux1Low` and `rxAux2Low` in telemetry JSON and the Web receiver-check line;
+    - updated host tests so AUX2 high is recognized as a valid switch position but blocks the default bench-baseline-ready state;
+    - updated the arrival checklist, field one-page sheet, and acceptance log template with the same low-baseline rule;
+    - `git diff --check` reported no real whitespace errors, only existing LF/CRLF warnings;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `64 passed, 0 failed`, Web-output-path `9 passed, 0 failed`;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - no firmware upload, serial open, MSP write, arming, or motor action was performed.
+  - 2026-07-05 MC6C AUX1 high baseline test:
+    - added explicit host coverage that CH5/AUX1 high is a valid switch position but blocks `rxBenchReady`;
+    - corrected the older findings wording so it no longer says clear high switch positions are bench-ready;
+    - `git diff --check` reported no real whitespace errors, only existing LF/CRLF warnings;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_host_tests.ps1` passed;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `66 passed, 0 failed`, Web-output-path `9 passed, 0 failed`;
+    - no firmware upload, serial open, MSP write, arming, or motor action was performed.
+  - 2026-07-05 MC6C low-baseline documentation alignment:
+    - updated `replacement_fc_ready_workflow.md` so Web `可继续无桨台架检查` means throttle low plus CH5/AUX1 low and CH6/AUX2 low, not merely clear AUX switch extremes;
+    - updated `docs/evidence/replacement_fc/README.md` so the Receiver evidence package records CH5/CH6 high only as direction self-test movement evidence, not bench-baseline readiness.
+  - 2026-07-05 safe default upload/build alignment:
+    - added `[platformio] default_envs = esp32-s3-unified-web` so bare PlatformIO builds use the safe Web/sensor/simulation firmware instead of the older `esp32-s3-devkitc-1` environment;
+    - updated `README.md` to use the explicit safe upload command `platformio.exe run -e esp32-s3-unified-web -t upload --upload-port COM55`;
+    - documented that `esp32-s3-unified-web-fc-ready` is not the first manual-flight firmware and must wait for replacement-FC Receiver, no-prop motor, failsafe, UART3 MSP, and low-altitude MC6C direction acceptance evidence;
+    - attempted to inspect the user-provided ESC image path, but `D:\Vitual C\virtual desktop\微信图片_20260704225613_218_125.jpg` was not present in that session; later photo evidence confirmed the ordinary white/red/black three-wire PWM/OneShot ESC harness;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed;
+    - direct `platformio.exe run` now builds only `esp32-s3-unified-web`;
+    - `git diff --check` reported no real whitespace errors, only existing LF/CRLF warnings.
+  - 2026-07-05 Betaflight setup card and RAW_RC clamp:
+    - added `replacement_fc_betaflight_setup_card.md` for replacement-FC Setup, Ports, Receiver, Modes, Motors, failsafe, and evidence capture;
+    - linked the card from `README.md`, `replacement_fc_ready_workflow.md`, `replacement_fc_arrival_checklist.md`, `replacement_fc_acceptance_log_template.md`, and `docs/evidence/replacement_fc/README.md`;
+    - hardened `buildBetaflightRawRC()` so final MSP RAW_RC packing clamps every channel, including unused neutral fill, to 1000-2000;
+    - added host coverage for low/high clamping in `test/test_fc_ready_logic.cpp`;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `72 passed, 0 failed`, Web-output-path `9 passed, 0 failed`;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - `git diff --check` reported no real whitespace errors, only existing LF/CRLF warnings;
+    - no firmware upload, serial open, MSP write, arming, or motor action was performed.
+  - 2026-07-05 low-altitude direction troubleshooting card:
+    - added `replacement_fc_manual_direction_troubleshooting_card.md` for first low-altitude MC6C direction acceptance failures;
+    - card maps symptoms such as takeoff flip, fast yaw spin, reversed AIL/ELE/RUD, no lift, drift, and failed failsafe to the correct Betaflight/receiver/motor/prop checks;
+    - linked the card from `README.md`, `replacement_fc_ready_workflow.md`, `replacement_fc_arrival_checklist.md`, `replacement_fc_acceptance_log_template.md`, `docs/evidence/replacement_fc/README.md`, and `task_plan.md`;
+    - added a failure/fix record table to the acceptance log template.
+  - 2026-07-05 bidirectional MC6C self-test final verification:
+    - confirmed the unified Web receiver wizard records baseline, AIL right, AIL left, ELE forward, ELE back, THR high, RUD right, RUD left, CH5 high, and CH6 high;
+    - confirmed replacement-FC workflow, acceptance log template, and evidence README describe the same bidirectional Receiver proof and keep ELE final direction tied to Betaflight model preview;
+    - updated `task_plan.md` so the completed direction self-test items explicitly say AIL/RUD left-right coverage and ELE forward/back movement coverage;
+    - `git diff --check` reported no real whitespace errors, only LF/CRLF warnings;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `79 passed, 0 failed`, Web-output-path `9 passed, 0 failed`;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - no firmware upload, serial open, MSP write, arming, or motor action was performed;
+    - the user-provided ESC image path still was not present locally in that pass; later photo evidence confirmed the ordinary three-wire PWM/OneShot signal/5V/GND wiring pattern, with BEC red wire still meter-confirmed before use.
+  - 2026-07-05 MC6C goal completion audit page:
+    - audited the current replacement-FC docs and tests against the active objective: the aircraft must fly in commanded directions under MC6C control, not merely compile or show a Web page;
+    - added `replacement_fc_goal_completion_audit.md` as a single final audit page separating software-ready evidence from missing real replacement-FC hardware evidence;
+    - linked the audit page from `README.md`, `replacement_fc_arrival_checklist.md`, `replacement_fc_acceptance_log_template.md`, and `docs/evidence/replacement_fc/README.md`;
+    - updated `task_plan.md` so the audit page is an explicit replacement-FC readiness artifact;
+    - `git diff --check` reported no real whitespace errors, only LF/CRLF warnings;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `79 passed, 0 failed`, Web-output-path `9 passed, 0 failed`;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - no firmware code, upload, serial open, MSP write, arming, or motor action was performed.
+  - 2026-07-05 replacement-FC command record card:
+    - added `replacement_fc_command_record_card.md` so arrival-day PowerShell, PlatformIO, Betaflight CLI, USB-TTL, UART3 probe, FC diag, default Web, and later FC-ready commands live in one card;
+    - linked the command card from `README.md`, `replacement_fc_arrival_checklist.md`, `replacement_fc_acceptance_log_template.md`, `docs/evidence/replacement_fc/README.md`, and `task_plan.md`;
+    - confirmed the user-provided ESC image path was still not present in that pass; later photo evidence confirmed ordinary three-wire PWM/OneShot signal/5V/GND wiring, with BEC red wire still meter-confirmed before use;
+    - `git diff --check` reported no real whitespace errors, only LF/CRLF warnings;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `79 passed, 0 failed`, Web-output-path `9 passed, 0 failed`;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - no firmware upload, serial open, MSP write, arming, motor action, or flight action was performed.
+  - 2026-07-05 MSP write-interface narrowing:
+    - audited the current `FCBridge` and `MSP` write paths after the replacement-FC command-card work;
+    - changed `FCBridge` so external code can read MSP diagnostics through `getMSPDiag()` but cannot obtain a mutable `MSP&` from the bridge;
+    - moved `MSP::sendCommand()` from the public API to the private implementation path, so arbitrary MSP command writes are no longer exposed to other modules;
+    - added compile-time guards inside `MSP::setRawRC()` and `MSP::sendArmCommand()` so direct calls return false unless `ENABLE_REAL_FC_OUTPUT` or `ENABLE_ESP32_ARM_DISARM` is explicitly enabled;
+    - updated `fc_diag_main.cpp`, `unified_web_main.cpp`, and `task_plan.md` for the read-only diagnostic accessor;
+    - `git diff --check` reported no real whitespace errors, only LF/CRLF warnings;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_host_tests.ps1` passed with manual-control `23 passed, 0 failed`, FC-ready logic `79 passed, 0 failed`, Web-output-path `9 passed, 0 failed`;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed after the interface narrowing;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - no firmware upload, serial open, MSP write, arming, motor action, or flight action was performed.
+  - 2026-07-05 replacement-FC evidence wording correction:
+    - corrected `task_plan.md` for the then-current state where the ESC photo was not available locally;
+    - this correction was later superseded after the user provided the ESC photo; current docs now treat the ESC as verified ordinary PWM/OneShot while keeping BEC red-wire use meter-confirmed;
+    - tightened `replacement_fc_acceptance_log_template.md` and `docs/evidence/replacement_fc/README.md` so low-altitude manual direction evidence records that the pilot stands behind the aircraft, the nose points toward open space, each direction input is short/light, and any abnormal reaction causes immediate throttle cut/disarm;
+    - `git diff --check` reported no real whitespace errors, only LF/CRLF warnings;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `79 passed, 0 failed`, Web-output-path `9 passed, 0 failed`;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - no code change, firmware upload, serial open, MSP write, arming, motor action, or flight action was performed.
+  - 2026-07-05 replacement-FC static check repair:
+    - fixed `scripts/run_replacement_fc_static_checks.ps1` after Windows PowerShell reported `The string is missing the terminator: "`;
+    - replaced Chinese source-string assertions with UTF-8 hex assertions so the static check can verify Chinese evidence wording without depending on source-file code page behavior;
+    - fixed the recursive source scan so it filters out directories before calling `Get-Content`;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_static_checks.ps1` passed;
+    - `git diff --check` reported no real whitespace errors, only LF/CRLF warnings;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `79 passed, 0 failed`, Web-output-path `9 passed, 0 failed`;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - no firmware upload, serial open, MSP write, arming, motor action, or flight action was performed.
+  - 2026-07-05 replacement-FC goal-overclaim static guard:
+    - extended `scripts/run_replacement_fc_static_checks.ps1` so it now asserts that the goal audit still says the real flight goal is incomplete until replacement-FC physical evidence exists;
+    - added static assertions that the arrival checklist still forbids ESP32-S3 ESC signal wiring and keeps CH6 low for the first manual flight;
+    - added a static assertion that the field one-page still says the first manual flight does not use ESP32 real assist output;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_static_checks.ps1` passed;
+    - `git diff --check` reported no real whitespace errors, only LF/CRLF warnings;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `79 passed, 0 failed`, Web-output-path `9 passed, 0 failed`;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - no firmware upload, serial open, MSP write, arming, motor action, or flight action was performed.
+  - 2026-07-05 replacement-FC script hardware-action guard:
+    - extended `scripts/run_replacement_fc_static_checks.ps1` so `run_host_tests.ps1` and `run_replacement_fc_software_checks.ps1` are checked for PlatformIO upload targets, `--upload-port`, and serial monitor commands;
+    - added an assertion that `run_replacement_fc_software_checks.ps1` still runs the static safety checks;
+    - first attempt matched the static checker's own regex literal, then the scan was narrowed to the host/software check scripts;
+    - second attempt hit PowerShell command-array syntax, then the script was changed to store paths and call `Get-Item` inside the loop;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_static_checks.ps1` passed;
+    - `git diff --check` reported no real whitespace errors, only LF/CRLF warnings;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `79 passed, 0 failed`, Web-output-path `9 passed, 0 failed`;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - no firmware upload, serial open, MSP write, arming, motor action, or flight action was performed.
+  - 2026-07-05 real-FC output PlatformIO environment guard:
+    - extended `scripts/run_replacement_fc_static_checks.ps1` so `platformio.ini` is scanned by environment section;
+    - the static check now requires `-DENABLE_REAL_FC_OUTPUT=1` to appear exactly once, only under `esp32-s3-unified-web-fc-ready`;
+    - this protects the default `esp32-s3-unified-web` and diagnostic firmware targets from accidentally compiling real FC output;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_static_checks.ps1` passed;
+    - `git diff --check` reported no real whitespace errors, only LF/CRLF warnings;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `79 passed, 0 failed`, Web-output-path `9 passed, 0 failed`;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - no firmware upload, serial open, MSP write, arming, motor action, or flight action was performed.
+  - 2026-07-05 FC-ready Web takeover/timeout host coverage:
+    - extended `test/test_fc_ready_web_output_path.cpp` so it now proves a fresh Web direction may queue real override only while `ManualController` is not in neutral-hold;
+    - added coverage that `takeover=true` forces neutral-hold, neutralizes roll, lowers the Web throttle channel, and prevents real FC override queueing;
+    - added coverage that stale Web direction input after `MC_INPUT_TIMEOUT_MS` also forces neutral-hold and prevents real FC override queueing;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_host_tests.ps1` passed;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `79 passed, 0 failed`, Web-output-path `20 passed, 0 failed`;
+    - `git diff --check` reported no real whitespace errors, only LF/CRLF warnings;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - no firmware upload, serial open, MSP write, arming, motor action, or flight action was performed.
+  - 2026-07-05 ESP32 arming and legacy-output build-flag guard:
+    - audited legacy `MissionPlanner`, `FollowController`, `main.cpp`, `TaskManager`, `FCBridge`, and `MSP` output boundaries;
+    - confirmed the remaining legacy arm/disarm and follow-output calls compile closed by default;
+    - extended `scripts/run_replacement_fc_static_checks.ps1` so any PlatformIO environment enabling `ENABLE_ESP32_ARM_DISARM=1` or `ENABLE_LEGACY_FOLLOW_FC_OUTPUT=1` fails the static check;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_static_checks.ps1` passed;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_software_checks.ps1` passed;
+    - host tests passed: manual-control `23 passed, 0 failed`, FC-ready logic `79 passed, 0 failed`, Web-output-path `20 passed, 0 failed`;
+    - builds passed: `esp32-s3-unified-web`, `esp32-s3-unified-web-fc-ready`, `esp32-s3-fc-uart-probe`, and `esp32-s3-fc-diag`;
+    - `git diff --check` reported only LF/CRLF warnings and no real whitespace errors;
+    - no firmware upload, serial open, MSP write, arming, motor action, or flight action was performed.
+  - 2026-07-05 unified Web environment separation guard:
+    - added static parsing of individual PlatformIO environment sections;
+    - required default `esp32-s3-unified-web` to stay free of `comm/fc_bridge.cpp` and `comm/msp.cpp`;
+    - required future-only `esp32-s3-unified-web-fc-ready` to explicitly include both FC bridge and MSP sources;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_static_checks.ps1` passed;
+    - no firmware upload, serial open, MSP write, arming, motor action, or flight action was performed.
+  - 2026-07-05 FC-ready output diagnostic accuracy:
+    - changed `FCBridge::sendRawRC()` so `FCOutputDiag.lastRoll/lastPitch/lastYaw/lastThrottle/lastAux1/lastAux2` are copied from packed/clamped Betaflight RAW_RC slots after `buildBetaflightRawRC()`;
+    - extended `scripts/run_replacement_fc_static_checks.ps1` to assert those diagnostic fields keep using the packed `ch[FC_RAW_RC_*]` values;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_replacement_fc_static_checks.ps1` passed;
+    - `powershell -ExecutionPolicy Bypass -File scripts\run_host_tests.ps1` passed with manual-control `23`, FC-ready logic `79`, and Web-output-path `20`;
+    - no firmware upload, serial open, MSP write, arming, motor action, or flight action was performed.
+  - 2026-07-05 ESC photo and Web JSON evidence correction:
+    - inspected the user-provided ESC photo at `D:\Vitual C\virtual desktop\微信图片_20260704225613_218_125.jpg`;
+    - verified it matches the ordinary PWM/OneShot three-wire servo-plug pattern: white/red/black control plug, independent thick red/black power input, and three thick motor phase leads;
+    - updated `replacement_fc_ready_workflow.md`, `replacement_fc_arrival_checklist.md`, and `replacement_fc_motor_direction_card.md` so the red wire/BEC must be meter-confirmed and multiple ESC BEC red wires are not paralleled;
+    - updated `task_plan.md`, `findings.md`, and `scripts/run_replacement_fc_static_checks.ps1` so the stale "ESC photo unavailable" assumption is no longer enforced;
+    - updated `replacement_fc_command_record_card.md` and `docs/evidence/replacement_fc/README.md` to define `rc*` as Betaflight MSP_RC functional-order values and `fcOut*` as packed/clamped Betaflight RAW_RC output diagnostics;
+    - no firmware upload, serial open, MSP write, arming, motor action, or flight action was performed.
+  - 2026-07-05 unified Web FC-ready banner correction:
+    - corrected `src/unified_web_main.cpp` file header and serial startup text so the default build is described as display-only/no MSP writes, while FC-ready is described as gated `MSP_SET_RAW_RC` roll/pitch/yaw assist;
+    - added a dynamic Web `safetyBanner` in `src/web/index_html.h` so the page no longer uses the default no-MSP-write warning when compiled as `esp32-s3-unified-web-fc-ready`;
+    - extended `scripts/run_replacement_fc_static_checks.ps1` to preserve this distinction between default safe Web and future-only FC-ready output;
+    - no firmware upload, serial open, MSP write, arming, motor action, or flight action was performed.

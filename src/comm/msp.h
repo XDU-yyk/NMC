@@ -61,7 +61,6 @@ class MSP {
 public:
     void begin(HardwareSerial& serial, uint32_t baud, int rxPin, int txPin);
 
-    bool sendCommand(uint8_t cmd, const uint8_t* payload, uint8_t size);
     bool request(uint8_t cmd, MSPFrame& frame, uint32_t timeoutMs = 100);
 
     bool readAttitude(float& roll, float& pitch, float& yaw);
@@ -69,6 +68,8 @@ public:
     bool readBattery(uint8_t& cells, float& voltage);
     bool readRC(uint16_t channels[16], uint8_t& count);
     bool readIMU(int16_t acc[3], int16_t gyro[3]);
+    // armingFlags bit 0 is the Betaflight MSP_STATUS ARM active-box state.
+    // It is not the Betaflight arming-disable-flags field from MSP_STATUS_EX.
     bool readStatus(uint16_t& cycleTime, uint8_t& armingFlags);
 
     bool setRawRC(const uint16_t channels[16]);
@@ -81,6 +82,7 @@ private:
     MSPDiag m_diag;
 
     uint8_t calcChecksum(const MSPFrame& frame);
+    bool sendCommand(uint8_t cmd, const uint8_t* payload, uint8_t size);
     bool readByteWithTimeout(uint8_t& out, uint32_t deadline);
     bool readFrame(MSPFrame& frame, uint32_t timeoutMs);
     bool expectResponse(uint8_t cmd, MSPFrame& frame, uint32_t timeoutMs);

@@ -11,13 +11,14 @@
 class MotorController {
 public:
     void begin() {}
-    void arm()   { m_armed = true; }
-    void disarm(){ m_armed = false; }
-    void emergencyStop() { m_armed = false; }
-    bool isArmed() const { return m_armed; }
-    void setThrottle(float t) {}
-private:
-    bool m_armed = false;
+
+    // ESP32-S3 is not allowed to arm motors in this project. Motor output,
+    // arming, failsafe, and ESC driving belong to Betaflight/F4V3S.
+    void arm() {}
+    void disarm() {}
+    void emergencyStop() {}
+    bool isArmed() const { return false; }
+    void setThrottle(float) {}
 };
 
 extern MotorController motors;

@@ -12,7 +12,11 @@ void FollowController::begin() {
     m_pidIntegralX = m_pidIntegralY = m_pidIntegralZ = 0;
     m_pidLastErrorX = m_pidLastErrorY = m_pidLastErrorZ = 0;
     m_mode = FollowMode::IDLE;
+#if ENABLE_LEGACY_FOLLOW_FC_OUTPUT
     LOG(LOG_TAG_FOLLOW, "Follow controller init — MSP passthrough mode");
+#else
+    LOG(LOG_TAG_FOLLOW, "Follow controller init — FC output disabled");
+#endif
 }
 
 void FollowController::setHomePosition(float x, float y, float z) {
@@ -31,11 +35,13 @@ void FollowController::setMode(FollowMode mode) {
 }
 
 void FollowController::emergencyStop() {
+#if ENABLE_LEGACY_FOLLOW_FC_OUTPUT
     FCOutput out;
     zeroOutput(out);
     out.throttle = 1000;  // 最低油门
     out.overrideRC = true;
     fcBridge.setOutput(out);
+#endif
     m_mode = FollowMode::EMERGENCY;
     LOG(LOG_TAG_FOLLOW, "EMERGENCY STOP!");
 }
@@ -47,6 +53,10 @@ void FollowController::update() {
     float dt = (float)(now - m_lastUpdate) / 1000.0f;
     m_lastUpdate = now;
 
+#if !ENABLE_LEGACY_FOLLOW_FC_OUTPUT
+    (void)dt;
+    return;
+#else
     const FusionState& state = fusion.getState();
     FCOutput out;
     zeroOutput(out);
@@ -71,6 +81,7 @@ void FollowController::update() {
     }
 
     fcBridge.setOutput(out);
+#endif
 }
 
 /* ── PID 计算 ── */

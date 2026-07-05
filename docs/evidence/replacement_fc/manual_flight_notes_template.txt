@@ -1,0 +1,87 @@
+# manual_flight_notes.txt template
+
+用途: 低空 MC6C 手动方向验收后，把本文件另存为
+docs/evidence/replacement_fc/manual_flight_notes.txt。
+
+注意: 本文件只是记录模板。真正通过仍然需要
+manual_hover_direction_video.mp4、验收记录和最终审计表共同证明。
+
+Date:
+Pilot / recorder:
+Location:
+Wind / environment:
+
+Final Channel Map:
+
+MC6C setup:
+- Mode: UAV
+- V-TAIL: off
+- ELEVON: off
+- CH5/AUX1 purpose:
+- CH6/AUX2 purpose:
+
+Preflight proof summary:
+- New replacement FC installed: yes / no
+- Betaflight model preview direction correct: yes / no
+- Receiver CH1-CH6 mapping and direction correct: yes / no
+- M1-M4 motor order correct, no-prop proof recorded: yes / no
+- Motor rotation and prop direction checked: yes / no
+- Failsafe video recorded: yes / no
+- Default esp32-s3-unified-web does not affect manual flight: yes / no
+
+First manual flight safety state:
+- CH6/AUX2 low for first manual flight: yes / no
+- ESP32 did not participate in first manual flight: yes / no
+- Pilot stood behind tail: yes / no
+- Nose pointed toward open space: yes / no
+- Each direction input was short and light: yes / no
+- Immediate throttle cut / disarm plan ready: yes / no
+
+Manual direction results:
+
+Throttle result:
+- Expected: stable lift increase and stable throttle cut.
+- Actual:
+- pass/fail:
+
+AIL right result:
+- Expected: slight right response from nose direction.
+- Actual:
+- pass/fail:
+
+AIL left result:
+- Expected: slight left response from nose direction.
+- Actual:
+- pass/fail:
+
+ELE forward result:
+- Expected: slight forward response.
+- Actual:
+- pass/fail:
+
+ELE backward result:
+- Expected: slight backward response.
+- Actual:
+- pass/fail:
+
+RUD right result:
+- Expected: nose yaws right without sudden roll.
+- Actual:
+- pass/fail:
+
+RUD left result:
+- Expected: nose yaws left without sudden roll.
+- Actual:
+- pass/fail:
+
+Overall conclusion:
+- Manual MC6C direction flight passed: yes / no
+- Any takeoff flip, violent side tilt, or uncontrolled spin: yes / no
+- If no, missing or failed item:
+
+Evidence paths:
+- manual_hover_direction_video.mp4:
+- acceptance log:
+- related failure notes, if any:
+
+Next action:

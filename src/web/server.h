@@ -52,12 +52,67 @@ struct TelemetryData {
     uint32_t gpsFailedChecksum = 0;
     // 飞控
     bool   fcOnline = false;
+    bool   fcSimulated = false;
     bool   armed = false;
     int    flightMode = 0;       // 0=IDLE,1=HOVER,2=FOLLOW,3=RTH,4=LOST
+    int    fcScenario = 0;
+    const char* fcScenarioName = "offline";
+    bool   fcFailsafe = false;
+    uint16_t fcCycleTimeUs = 0;
+    uint8_t  fcCpuLoad = 0;
+    uint8_t  fcLinkQuality = 0;
+    float    fcVario = 0;
+    uint16_t rcRoll = 1500;
+    uint16_t rcPitch = 1500;
+    uint16_t rcThrottle = 1000;
+    uint16_t rcYaw = 1500;
+    uint16_t rcAux1 = 1500;
+    uint16_t rcAux2 = 1000;
+    uint8_t  rcChannelCount = 0;
+    bool     fcAssistSwitch = false;
+    bool     fcAssistGateOpen = false;
+    bool     fcRealOutputCompiled = false;
+    bool     fcRealOnline = false;
+    bool     rxHasSixChannels = false;
+    bool     rxCenterOk = false;
+    bool     rxThrottleLow = false;
+    bool     rxAux1Valid = false;
+    bool     rxAux2Valid = false;
+    bool     rxAux1Low = false;
+    bool     rxAux2Low = false;
+    bool     rxBenchReady = false;
+    uint32_t fcOutSetCalls = 0;
+    uint32_t fcOutOverrideRequests = 0;
+    uint32_t fcOutClearRequests = 0;
+    uint32_t fcOutRawAttempts = 0;
+    uint32_t fcOutRawOk = 0;
+    uint32_t fcOutRawFail = 0;
+    uint32_t fcOutGateBlocks = 0;
+    uint32_t fcOutStaleBlocks = 0;
+    uint32_t fcOutLastSetAgeMs = 0;
+    uint32_t fcOutLastSendAgeMs = 0;
+    uint16_t fcOutRoll = 1500;
+    uint16_t fcOutPitch = 1500;
+    uint16_t fcOutYaw = 1500;
+    uint16_t fcOutThrottle = 1000;
+    uint16_t fcOutAux1 = 1500;
+    uint16_t fcOutAux2 = 1000;
+    const char* fcOutReason = "n/a";
+    uint32_t fcMspTxFrames = 0;
+    uint32_t fcMspTxBytes = 0;
+    uint32_t fcMspRxBytes = 0;
+    uint32_t fcMspTimeouts = 0;
+    const char* fcMspLastError = "n/a";
     // 各数据源在线状态
     bool   tofOnline = false;
     bool   gpsOnline = false;
     bool   camOnline = false;     // 摄像头在线
+    bool   camValid = false;
+    uint32_t camFrames = 0;
+    uint32_t camErrors = 0;
+    uint32_t camAgeMs = 0;
+    uint32_t camBytes = 0;
+    uint32_t camRecoveries = 0;
     int    dataSource = 0;       // 0=sim, 1=tof, 2=gps, 3=fc, 4=mixed
     uint32_t errorFlags = 0;     // bit0=tof_err, bit1=gps_err, bit2=fc_err
     uint8_t  tofStatus = 255;    // 0=ok, 254=timeout, 255=not initialized
@@ -73,6 +128,11 @@ struct TelemetryData {
 typedef void (*TelemetryCallback)(TelemetryData& data);
 typedef void (*CommandCallback)(const char* cmd, int value);
 
+/* 方向意图回调: 各轴归一化 -1.0~+1.0; pilotOverride=true 表示网页暂停/交还遥控。
+   由前端虚拟摇杆/方向按钮通过 WS 消息 {"cmd":"dir",...} 触发。 */
+typedef void (*DirectionCallback)(float forward, float right, float yaw,
+                                  float throttle, bool pilotOverride);
+
 class WebServerManager
 {
 public:
@@ -80,6 +140,7 @@ public:
     void loop();
     void broadcastTelemetry();
     void onCommand(CommandCallback callback) { m_cmdCallback = callback; }
+    void onDirection(DirectionCallback callback) { m_dirCallback = callback; }
     bool isConnected() const { return WiFi.isConnected(); }
 #ifdef WEB_HTTP_ONLY
     uint8_t getClientCount() const { return 0; }
@@ -98,6 +159,7 @@ private:
 #endif
 
     CommandCallback  m_cmdCallback = nullptr;
+    DirectionCallback m_dirCallback = nullptr;
     TelemetryCallback m_telemetryCb = nullptr;
     bool m_apMode = false;
 

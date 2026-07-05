@@ -4,12 +4,26 @@
  */
 
 #include "comm/fc_bridge.h"
+#include "comm/fc_rc_mapping.h"
 
 FCBridge fcBridge;
+
+namespace {
+constexpr uint32_t FC_OFFLINE_STATUS_POLL_MS = 500;
+}
 
 void FCBridge::begin() {
     memset(&m_state, 0, sizeof(m_state));
     memset(&m_lastOutput, 0, sizeof(m_lastOutput));
+    m_outputDiag = FCOutputDiag{};
+    m_lastOutput.roll = FC_RC_MID;
+    m_lastOutput.pitch = FC_RC_MID;
+    m_lastOutput.yaw = FC_RC_MID;
+    m_lastOutput.throttle = 1000;
+    m_lastOutput.aux1 = FC_RC_MID;
+    m_lastOutput.aux2 = FC_RC_MID;
+    m_lastOutput.overrideRC = false;
+    m_lastOutputUpdate = 0;
 
     // 初始化 MSP 协议层，连接飞控 UART
     HardwareSerial* fcSerial = &Serial2;  // FC_UART_NUM = 2
@@ -34,41 +48,74 @@ void FCBridge::begin() {
 void FCBridge::update() {
     uint32_t now = millis();
 
-    // 分时读取各数据块，避免单次 poll 阻塞太久
-    if (now - m_lastReadAttitude >= 10) { pollAttitude();  m_lastReadAttitude = now; }
-    if (now - m_lastReadAltitude >= 20) { pollAltitude();  m_lastReadAltitude = now; }
-    if (now - m_lastReadBattery  >= 500) { pollBattery();  m_lastReadBattery  = now; }
-    if (now - m_lastReadRC       >= 30)  { pollRC();       m_lastReadRC       = now; }
-    if (now - m_lastReadStatus   >= 200) { pollStatus();   m_lastReadStatus   = now; }
+    // Keep the Web/camera loop responsive during bring-up. A reversed or
+    // disconnected UART can make each MSP request wait for its timeout, so
+    // offline mode only probes status at a low rate; online mode reads at most
+    // one data block per update() call.
+    if (!isOnline()) {
+        if (now - m_lastReadStatus >= FC_OFFLINE_STATUS_POLL_MS) {
+            pollStatus();
+            m_lastReadStatus = now;
+        }
+    } else if (now - m_lastReadStatus >= 200) {
+        pollStatus();
+        m_lastReadStatus = now;
+    } else if (now - m_lastReadRC >= 30) {
+        pollRC();
+        m_lastReadRC = now;
+    } else if (now - m_lastReadBattery >= 500) {
+        pollBattery();
+        m_lastReadBattery = now;
+    } else if (now - m_lastReadAltitude >= 20) {
+        pollAltitude();
+        m_lastReadAltitude = now;
+    } else if (now - m_lastReadAttitude >= 10) {
+        pollAttitude();
+        m_lastReadAttitude = now;
+    }
 
     // 发送控制指令 (按需, 最大 50Hz)
-    if (m_lastOutput.overrideRC && (now - m_lastSendRC >= 20)) {
-        uint16_t ch[16] = {0};
-        ch[0] = m_lastOutput.roll;
-        ch[1] = m_lastOutput.pitch;
-        ch[2] = m_lastOutput.throttle;
-        ch[3] = m_lastOutput.yaw;
-        ch[4] = m_lastOutput.aux1;
-        ch[5] = m_lastOutput.aux2;
-        m_msp.setRawRC(ch);
+    const bool outputFresh = (now - m_lastOutputUpdate) <= REAL_FC_OUTPUT_HOLD_MS;
+    if (!outputFresh) {
+        if (m_lastOutput.overrideRC) {
+            m_outputDiag.staleBlocks++;
+            m_outputDiag.lastReason = "stale";
+        }
+        m_lastOutput.overrideRC = false;
+    }
+
+    if (m_lastOutput.overrideRC && outputFresh && (now - m_lastSendRC >= 20)) {
+#if ENABLE_REAL_FC_OUTPUT
+        if (isAssistGateOpen()) {
+            sendRawRC(m_lastOutput);
+        } else {
+            m_outputDiag.gateBlocks++;
+            m_outputDiag.lastReason = "gate";
+            m_lastSendRC = now;
+        }
+#else
+        m_outputDiag.gateBlocks++;
+        m_outputDiag.lastReason = "compile_gate";
         m_lastSendRC = now;
+#endif
     }
 }
 
 void FCBridge::setOutput(const FCOutput& out) {
     m_lastOutput = out;
-    // 立即发送一次，后续由 update() 定时续发
-    if (out.overrideRC) {
-        uint16_t ch[16] = {0};
-        ch[0] = out.roll;
-        ch[1] = out.pitch;
-        ch[2] = out.throttle;
-        ch[3] = out.yaw;
-        ch[4] = out.aux1;
-        ch[5] = out.aux2;
-        m_msp.setRawRC(ch);
-        m_lastSendRC = millis();
+    m_outputDiag.setOutputCalls++;
+    m_outputDiag.lastSetMs = millis();
+
+    if (!out.overrideRC) {
+        m_outputDiag.clearRequests++;
+        m_outputDiag.lastReason = "clear";
+    } else {
+        m_outputDiag.overrideRequests++;
+        m_outputDiag.lastReason = "queued";
     }
+
+    // Queue the request; update() is the single 50Hz send/block path.
+    m_lastOutputUpdate = m_outputDiag.lastSetMs;
 }
 
 bool FCBridge::isOnline() const {
@@ -76,15 +123,25 @@ bool FCBridge::isOnline() const {
 }
 
 bool FCBridge::arm() {
+#if ENABLE_ESP32_ARM_DISARM
     bool ok = m_msp.sendArmCommand(true);
     if (ok) m_state.armed = true;
     return ok;
+#else
+    LOG(LOG_TAG_FC, "arm blocked: ESP32 arming disabled");
+    return false;
+#endif
 }
 
 bool FCBridge::disarm() {
+#if ENABLE_ESP32_ARM_DISARM
     bool ok = m_msp.sendArmCommand(false);
     if (ok) m_state.armed = false;
     return ok;
+#else
+    LOG(LOG_TAG_FC, "disarm blocked: ESP32 disarming disabled");
+    return false;
+#endif
 }
 
 /* ── 分时读取子函数 ── */
@@ -133,4 +190,42 @@ void FCBridge::pollStatus() {
         m_state.valid = true;
         m_state.lastUpdate = millis();
     }
+}
+
+bool FCBridge::isAssistGateOpen() const {
+    return isAssistGateOpenFromRC(isOnline(),
+                                  m_state.armed,
+                                  m_state.rcChannels,
+                                  m_state.rcChannelCount,
+                                  REAL_FC_ASSIST_AUX_CHANNEL,
+                                  REAL_FC_ASSIST_AUX_MIN);
+}
+
+void FCBridge::sendRawRC(const FCOutput& out) {
+    uint16_t ch[16];
+    FCRawRCValues values;
+    values.roll = out.roll;
+    values.pitch = out.pitch;
+    values.yaw = out.yaw;
+    values.throttle = out.throttle;
+    values.aux1 = out.aux1;
+    values.aux2 = out.aux2;
+    buildBetaflightRawRC(values, ch, FC_RC_MID);
+    m_outputDiag.rawRcAttempts++;
+    m_outputDiag.lastRoll = ch[FC_RAW_RC_ROLL];
+    m_outputDiag.lastPitch = ch[FC_RAW_RC_PITCH];
+    m_outputDiag.lastYaw = ch[FC_RAW_RC_YAW];
+    m_outputDiag.lastThrottle = ch[FC_RAW_RC_THROTTLE];
+    m_outputDiag.lastAux1 = ch[FC_RAW_RC_AUX1];
+    m_outputDiag.lastAux2 = ch[FC_RAW_RC_AUX2];
+    const bool ok = m_msp.setRawRC(ch);
+    if (ok) {
+        m_outputDiag.rawRcOk++;
+        m_outputDiag.lastReason = "sent";
+    } else {
+        m_outputDiag.rawRcFail++;
+        m_outputDiag.lastReason = "write_fail";
+    }
+    m_lastSendRC = millis();
+    m_outputDiag.lastSendMs = m_lastSendRC;
 }
