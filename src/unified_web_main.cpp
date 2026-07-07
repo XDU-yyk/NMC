@@ -1,6 +1,6 @@
 /**
  * @file unified_web_main.cpp
- * @brief Unified AP dashboard firmware: camera + ToF + GPS + FC offline status.
+ * @brief Unified AP dashboard firmware: camera + ToF + GPS + read-only FC telemetry.
  *
  * Default build is display/diagnostic only and does not write MSP commands.
  * The future-only FC-ready build can send gated MSP_SET_RAW_RC for limited
@@ -17,13 +17,11 @@
 #include "sim/fc_sim.h"
 #include "control/manual_control.h"
 #include "comm/fc_rc_mapping.h"
-#if ENABLE_REAL_FC_OUTPUT
 #include "comm/fc_bridge.h"
-#endif
 
 #define WIFI_AP_SSID        "NMC-Umbrella"
 #define WIFI_AP_PASSWORD    "12345678"
-#define UNIFIED_FW_TAG      "unified-web-20260704-1"
+#define UNIFIED_FW_TAG      "unified-web-20260708-real-fc-ui"
 
 #define CAMERA_CAPTURE_PERIOD_MS 200
 #define CAMERA_CAPTURE_FAIL_LIMIT 3
@@ -404,30 +402,24 @@ static void fillTelemetry(TelemetryData& data)
     if (!gd.online) data.errorFlags |= 2;
 
     const auto& fc = simFc.getState();
-    data.fcOnline = fc.online;
-    data.fcSimulated = fc.simulated;
-    data.armed = fc.armed;
-    data.flightMode = fc.flightMode;
-    data.fcScenario = static_cast<int>(fc.scenario);
-    data.fcScenarioName = fc.scenarioName;
-    data.fcFailsafe = fc.failsafe;
-    data.fcCycleTimeUs = fc.cycleTimeUs;
-    data.fcCpuLoad = fc.cpuLoad;
-    data.fcLinkQuality = fc.linkQuality;
-    data.fcVario = fc.varioCms;
-    data.roll = fc.roll;
-    data.pitch = fc.pitch;
-    data.yaw = fc.yaw;
-    data.altitude = fc.altitudeCm;
-    data.batteryVoltage = fc.batteryVoltage;
-    data.batteryCells = fc.batteryCells;
-    data.rcRoll = fc.rcRoll;
-    data.rcPitch = fc.rcPitch;
-    data.rcThrottle = fc.rcThrottle;
-    data.rcYaw = fc.rcYaw;
+    data.fcOnline = false;
+    data.fcSimulated = false;
+    data.armed = false;
+    data.flightMode = 0;
+    data.fcScenario = -1;
+    data.fcScenarioName = "msp_wait";
+    data.fcFailsafe = false;
+    data.fcCycleTimeUs = 0;
+    data.fcCpuLoad = 0;
+    data.fcLinkQuality = 0;
+    data.fcVario = 0;
+    data.rcRoll = FC_RC_MID;
+    data.rcPitch = FC_RC_MID;
+    data.rcThrottle = 1000;
+    data.rcYaw = FC_RC_MID;
     data.rcAux1 = FC_RC_MID;
     data.rcAux2 = 1000;
-    data.rcChannelCount = 4;
+    data.rcChannelCount = 0;
     data.fcAssistSwitch = false;
     data.fcAssistGateOpen = false;
     data.rxHasSixChannels = false;
@@ -438,8 +430,6 @@ static void fillTelemetry(TelemetryData& data)
     data.rxAux1Low = false;
     data.rxAux2Low = false;
     data.rxBenchReady = false;
-#if ENABLE_REAL_FC_OUTPUT
-    data.fcRealOutputCompiled = true;
     data.fcRealOnline = fcBridge.isOnline();
     {
         const FCOutputDiag& od = fcBridge.getOutputDiag();
@@ -468,13 +458,12 @@ static void fillTelemetry(TelemetryData& data)
         data.fcMspTimeouts = md.timeoutCount;
         data.fcMspLastError = md.lastError[0] ? md.lastError : "none";
     }
+#if ENABLE_REAL_FC_OUTPUT
+    data.fcRealOutputCompiled = true;
 #else
     data.fcRealOutputCompiled = false;
-    data.fcRealOnline = false;
 #endif
-    if (fc.failsafe) data.errorFlags |= 4;
 
-#if ENABLE_REAL_FC_OUTPUT
     if (data.fcRealOnline) {
         const FCState& real = fcBridge.getState();
         data.fcOnline = true;
@@ -520,8 +509,9 @@ static void fillTelemetry(TelemetryData& data)
         data.rxAux1Low = rx.aux1Low;
         data.rxAux2Low = rx.aux2Low;
         data.rxBenchReady = rx.benchReady;
+    } else {
+        data.errorFlags |= 4;
     }
-#endif
 
     // Manual 方向控制场景: 用仿真运动学位置覆盖显示 (m → mm)
     if (fc.scenario == SimFcScenario::Manual) {
@@ -554,7 +544,7 @@ void setup()
     Serial.println("==============================================");
     Serial.println("  NMC Unified Web Dashboard");
     Serial.printf("  FW: %s\n", UNIFIED_FW_TAG);
-    Serial.println("  Camera + ToF + GPS + simulated FC status");
+    Serial.println("  Camera + ToF + GPS + read-only FC telemetry");
 #if ENABLE_REAL_FC_OUTPUT
     Serial.println("  FC-ready: gated MSP_SET_RAW_RC roll/pitch/yaw assist");
     Serial.println("  Gate: FC online + Betaflight ARM + MC6C CH6 + fresh Web heartbeat");
@@ -566,9 +556,7 @@ void setup()
 
     simFc.begin();
     g_manual.begin();
-#if ENABLE_REAL_FC_OUTPUT
     fcBridge.begin();
-#endif
 
     Serial.println("--- Camera ---");
     g_cameraBootFailed = !startCamera();
@@ -613,9 +601,7 @@ void loop()
     const uint32_t now = millis();
 
     gps.update();
-#if ENABLE_REAL_FC_OUTPUT
     fcBridge.update();
-#endif
 
     // 方向控制: 计算 RC 通道 (含超时归中/接管), 喂给仿真; 真机输出受安全门约束
     if (simFc.getState().scenario == SimFcScenario::Manual) {
