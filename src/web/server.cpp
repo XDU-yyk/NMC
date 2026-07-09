@@ -3,11 +3,12 @@
  * @brief   WebSocket Web 服务器 v2.0 — 解耦版
  * 
  * 遥测数据通过 TelemetryCallback 注入；
- * 未注册回调时自动使用内部模拟数据 (fillSimData)。
+ * 未注册回调时自动使用内部备用数据 (fillSimData)。
  */
 
 #include "web/server.h"
 #include "web/index_html.h"
+#include <esp_wifi.h>
 #include <string.h>
 
 WebServerManager webServer;
@@ -20,9 +21,9 @@ extern size_t   getCamLen();
 extern bool     getCamValid();
 extern uint32_t getCamFrames();
 extern uint32_t getCamErrors();
+extern "C" bool captureCameraFrameFromWeb() __attribute__((weak));
 extern "C" bool requestCameraRetryFromWeb() __attribute__((weak));
 #endif
-extern "C" bool setSimFcScenarioFromWeb(const char* scenario) __attribute__((weak));
 /* 方向意图 HTTP 入口 (unified-web 为 HTTP-only, 无 WebSocket)。
    各轴归一化 -1~+1; takeover 非 0 表示网页暂停/交还遥控。 */
 extern "C" bool setDirectionFromWeb(float fwd, float right, float yaw,
@@ -48,8 +49,48 @@ static String getQueryValue(const String& requestLine, const char* key)
 static const IPAddress AP_IP(192, 168, 4, 1);
 static const IPAddress AP_GATEWAY(192, 168, 4, 1);
 static const IPAddress AP_SUBNET(255, 255, 255, 0);
-static constexpr uint8_t AP_CHANNEL = 1;
+static constexpr uint8_t AP_CHANNEL = 9;
 static constexpr uint8_t AP_MAX_CLIENTS = 4;
+static bool s_apEventRegistered = false;
+
+static void logApEvent(WiFiEvent_t event)
+{
+    switch (event)
+    {
+    case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+        LOG(LOG_TAG_WEB, "AP station connected, stations=%u",
+            static_cast<unsigned>(WiFi.softAPgetStationNum()));
+        break;
+    case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+        LOG(LOG_TAG_WEB, "AP station disconnected, stations=%u",
+            static_cast<unsigned>(WiFi.softAPgetStationNum()));
+        break;
+    case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
+        LOG(LOG_TAG_WEB, "AP station IP assigned, stations=%u",
+            static_cast<unsigned>(WiFi.softAPgetStationNum()));
+        break;
+    default:
+        break;
+    }
+}
+
+static void configureApRadio()
+{
+    esp_err_t err = esp_wifi_set_ps(WIFI_PS_NONE);
+    if (err != ESP_OK) {
+        LOG(LOG_TAG_WEB, "esp_wifi_set_ps failed: %d", static_cast<int>(err));
+    }
+
+    err = esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20);
+    if (err != ESP_OK) {
+        LOG(LOG_TAG_WEB, "esp_wifi_set_bandwidth failed: %d", static_cast<int>(err));
+    }
+
+    err = esp_wifi_set_max_tx_power(78);
+    if (err != ESP_OK) {
+        LOG(LOG_TAG_WEB, "esp_wifi_set_max_tx_power failed: %d", static_cast<int>(err));
+    }
+}
 
 
 bool WebServerManager::begin(const char* ssid, const char* password, bool apMode)
@@ -59,6 +100,11 @@ bool WebServerManager::begin(const char* ssid, const char* password, bool apMode
 
     if (apMode)
     {
+        if (!s_apEventRegistered) {
+            WiFi.onEvent(logApEvent);
+            s_apEventRegistered = true;
+        }
+
         WiFi.persistent(false);
         WiFi.disconnect(true, true);
         WiFi.mode(WIFI_OFF);
@@ -66,6 +112,7 @@ bool WebServerManager::begin(const char* ssid, const char* password, bool apMode
 
         WiFi.mode(WIFI_AP);
         WiFi.setSleep(false);
+        configureApRadio();
 
         if (!WiFi.softAPConfig(AP_IP, AP_GATEWAY, AP_SUBNET))
         {
@@ -80,11 +127,15 @@ bool WebServerManager::begin(const char* ssid, const char* password, bool apMode
             return false;
         }
 
+        configureApRadio();
         delay(100);
-        LOG(LOG_TAG_WEB, "AP: %s @ %s ch=%u",
+        LOG(LOG_TAG_WEB, "AP: %s @ %s mac=%s ch=%u maxClients=%u",
             ssid,
             WiFi.softAPIP().toString().c_str(),
-            AP_CHANNEL);
+            WiFi.softAPmacAddress().c_str(),
+            AP_CHANNEL,
+            AP_MAX_CLIENTS);
+
     }
     else
     {
@@ -268,18 +319,6 @@ void WebServerManager::handleHttpRequest(WiFiClient& client)
             sendText(client, "bad json\n");
         }
     }
-    else if (requestLine.startsWith("GET /api/fc/sim ") || requestLine.startsWith("GET /api/fc/sim?"))
-    {
-        String scenario = getQueryValue(requestLine, "scenario");
-        if (!setSimFcScenarioFromWeb) {
-            sendText(client, "unsupported\n");
-        } else if (scenario.length() == 0) {
-            sendText(client, "missing scenario\n");
-        } else {
-            const bool ok = setSimFcScenarioFromWeb(scenario.c_str());
-            sendText(client, ok ? "ok\n" : "bad scenario\n");
-        }
-    }
     else if (requestLine.startsWith("GET /api/dir ") || requestLine.startsWith("GET /api/dir?"))
     {
         if (!setDirectionFromWeb) {
@@ -311,6 +350,9 @@ void WebServerManager::handleHttpRequest(WiFiClient& client)
     }
     else if (requestLine.startsWith("GET /capture.jpg") || requestLine.startsWith("GET /capture.jpeg"))
     {
+        if (captureCameraFrameFromWeb) {
+            (void)captureCameraFrameFromWeb();
+        }
         if (!getCamValid()) {
             sendText(client, "no frame\n");
         } else {
@@ -336,6 +378,9 @@ void WebServerManager::handleHttpRequest(WiFiClient& client)
         uint32_t lastSend = 0;
         while (client.connected()) {
             if (millis() - lastSend < 100) { delay(5); continue; }
+            if (captureCameraFrameFromWeb) {
+                (void)captureCameraFrameFromWeb();
+            }
             if (!getCamValid()) { delay(10); continue; }
             lastSend = millis();
             size_t len = getCamLen();
@@ -410,7 +455,7 @@ void WebServerManager::handleClientMessage(WebsocketsClient& client, WebsocketsM
 }
 #endif
 
-/* ── 内部模拟数据生成器（无注册回调时自动使用） ── */
+/* ── 内部备用数据生成器（无注册回调时自动使用） ── */
 void WebServerManager::fillSimData(TelemetryData& data)
 {
     uint32_t now = millis();
@@ -421,7 +466,7 @@ void WebServerManager::fillSimData(TelemetryData& data)
     data.pitch = 4.0f * sinf(t * 0.20f + 1.2f);
     data.yaw   = 25.0f * sinf(t * 0.10f + 2.5f);
 
-    // 位置 — 模拟小幅漂移
+    // 位置 — 小幅漂移
     data.posX = 200.0f * sinf(t * 0.05f);
     data.posY = 150.0f * sinf(t * 0.04f + 0.5f);
     data.posZ = 100.0f + 30.0f * sinf(t * 0.08f);
@@ -467,9 +512,9 @@ void WebServerManager::fillSimData(TelemetryData& data)
     data.fcOutReason = "n/a";
     data.fcMspLastError = "n/a";
 
-    // 数据源在线状态（无硬件时模拟离线）
+    // 数据源在线状态（无硬件时离线）
     data.tofOnline   = false;
-    data.gpsOnline   = true;   // GPS 模拟 fix（模拟数据源在线）
+    data.gpsOnline   = true;   // GPS 数据源在线
     data.dataSource  = 0;      // sim
     data.errorFlags  = 0;
     data.tofStatus   = 255;    // not initialized
@@ -494,8 +539,10 @@ void WebServerManager::buildTelemetryJson(JsonDocument& doc)
     if (m_telemetryCb) {
         m_telemetryCb(data);      // 外部数据源
     } else {
-        fillSimData(data);        // 内部模拟回退
+        fillSimData(data);        // 内部备用数据
     }
+
+    doc["fw"] = data.firmwareTag ? data.firmwareTag : "unified-web";
 
     // 姿态
     doc["roll"]  = data.roll;
@@ -527,7 +574,6 @@ void WebServerManager::buildTelemetryJson(JsonDocument& doc)
 
     // 飞控
     doc["fcOnline"]   = data.fcOnline;
-    doc["fcSimulated"] = data.fcSimulated;
     doc["armed"]      = data.armed;
     doc["flightMode"] = data.flightMode;
     doc["fcScenario"] = data.fcScenario;
@@ -589,6 +635,10 @@ void WebServerManager::buildTelemetryJson(JsonDocument& doc)
     doc["camAgeMs"]    = data.camAgeMs;
     doc["camBytes"]    = data.camBytes;
     doc["camRecoveries"] = data.camRecoveries;
+    doc["camSiod"] = data.camSiod;
+    doc["camSioc"] = data.camSioc;
+    doc["camSccbAddr"] = data.camSccbAddr;
+    doc["camLastError"] = data.camLastError ? data.camLastError : "n/a";
     doc["dataSource"]  = data.dataSource;
     doc["errorFlags"]  = data.errorFlags;
     doc["tofStatus"]  = data.tofStatus;

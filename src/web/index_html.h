@@ -1,6 +1,6 @@
 /**
  * @file index_html.h
- * @brief Unified NMC presentation dashboard.
+ * @brief Unified NMC submit dashboard.
  */
 
 #ifndef INDEX_HTML_H
@@ -8,12 +8,12 @@
 
 const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Cache-Control" content="no-store">
-<title>NMC Flight Deck</title>
+<title>NMC 飞行看板</title>
 <style>
 :root{
   color-scheme:dark;
@@ -115,8 +115,8 @@ h1{margin:0;font-size:24px;line-height:1.05;font-weight:800}
 .stack{display:grid;gap:9px}
 .line{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid var(--line);padding-top:8px}
 .line:first-child{border-top:0;padding-top:0}
-.line span:first-child{color:var(--muted);font-size:12px;text-transform:uppercase}
-.line strong{text-align:right;font-size:14px}
+.line span:first-child{color:var(--muted);font-size:12px;text-transform:uppercase;min-width:0}
+.line strong{text-align:right;font-size:14px;min-width:0;overflow-wrap:anywhere}
 .rc-grid{display:grid;gap:8px;padding:0 12px 12px}
 .rc-row{display:grid;grid-template-columns:54px 1fr 46px;gap:8px;align-items:center}
 .rc-row span{font-size:12px;color:var(--muted)}
@@ -150,14 +150,14 @@ h1{margin:0;font-size:24px;line-height:1.05;font-weight:800}
     <div class="brand">
       <div class="mark">NMC</div>
       <div>
-        <h1>NMC Flight Deck</h1>
-        <div class="kicker">Live Telemetry Console</div>
+        <h1>NMC 飞行看板</h1>
+        <div class="kicker">实时遥测控制台</div>
       </div>
     </div>
     <div class="statusbar">
-      <div id="netChip" class="chip warn"><span class="dot"></span><span>CONNECTING</span></div>
-      <div id="fwChip" class="chip">FW --</div>
-      <div id="clientChip" class="chip">CLIENTS --</div>
+      <div id="netChip" class="chip warn"><span class="dot"></span><span>连接中</span></div>
+      <div id="fwChip" class="chip">固件 --</div>
+      <div id="clientChip" class="chip">客户端 --</div>
     </div>
   </header>
 
@@ -165,23 +165,23 @@ h1{margin:0;font-size:24px;line-height:1.05;font-weight:800}
     <section class="panel camera">
       <div class="panel-head">
         <div>
-          <div class="panel-title">Camera</div>
-          <div class="panel-sub" id="camSub">Frame stream</div>
+          <div class="panel-title">摄像头</div>
+          <div class="panel-sub" id="camSub">图像流</div>
         </div>
         <div class="toolbar">
-          <div id="camChip" class="chip warn"><span class="dot"></span><span>STANDBY</span></div>
-          <button id="retryCam" class="btn" type="button">RETRY</button>
+          <div id="camChip" class="chip warn"><span class="dot"></span><span>待机</span></div>
+          <button id="retryCam" class="btn" type="button">重试</button>
         </div>
       </div>
       <div class="viewport">
-        <img id="cam" alt="camera frame">
-        <div id="camEmpty" class="empty">WAITING FOR FRAME</div>
+        <img id="cam" alt="摄像头画面">
+        <div id="camEmpty" class="empty">等待画面</div>
       </div>
       <div class="hud-row">
-        <div class="readout"><div class="label">Frames</div><div id="camFrames" class="value cyan">--</div></div>
-        <div class="readout"><div class="label">Payload</div><div id="camBytes" class="value">--</div></div>
-        <div class="readout"><div class="label">Age</div><div id="camAge" class="value">--</div></div>
-        <div class="readout"><div class="label">Recoveries</div><div id="camRecoveries" class="value">--</div></div>
+        <div class="readout"><div class="label">帧数</div><div id="camFrames" class="value cyan">--</div></div>
+        <div class="readout"><div class="label">图像大小</div><div id="camBytes" class="value">--</div></div>
+        <div class="readout"><div class="label">延迟</div><div id="camAge" class="value">--</div></div>
+        <div class="readout"><div class="label">恢复次数</div><div id="camRecoveries" class="value">--</div></div>
       </div>
     </section>
 
@@ -189,72 +189,72 @@ h1{margin:0;font-size:24px;line-height:1.05;font-weight:800}
       <section class="panel fc-panel">
         <div class="panel-head">
           <div>
-            <div class="panel-title">Flight Controller</div>
-            <div class="panel-sub" id="fcSub">MSP telemetry</div>
+            <div class="panel-title">飞控</div>
+            <div class="panel-sub" id="fcSub">MSP 遥测</div>
           </div>
-          <div id="fcChip" class="chip warn"><span class="dot"></span><span>MSP WAIT</span></div>
+          <div id="fcChip" class="chip warn"><span class="dot"></span><span>等待 MSP</span></div>
         </div>
         <div class="attitude-wrap">
           <div class="attitude"><div id="horizon" class="horizon"></div><div class="cross"></div></div>
           <div class="metric-grid">
-            <div class="metric"><div class="label">Roll</div><div id="roll" class="value cyan">--</div></div>
-            <div class="metric"><div class="label">Pitch</div><div id="pitch" class="value cyan">--</div></div>
-            <div class="metric"><div class="label">Yaw</div><div id="yaw" class="value cyan">--</div></div>
-            <div class="metric"><div class="label">State</div><div id="armed" class="value">--</div></div>
-            <div class="metric"><div class="label">Cycle</div><div id="cycle" class="value">--</div></div>
-            <div class="metric"><div class="label">Vario</div><div id="vario" class="value">--</div></div>
+            <div class="metric"><div class="label">横滚</div><div id="roll" class="value cyan">--</div></div>
+            <div class="metric"><div class="label">俯仰</div><div id="pitch" class="value cyan">--</div></div>
+            <div class="metric"><div class="label">航向</div><div id="yaw" class="value cyan">--</div></div>
+            <div class="metric"><div class="label">状态</div><div id="armed" class="value">--</div></div>
+            <div class="metric"><div class="label">周期</div><div id="cycle" class="value">--</div></div>
+            <div class="metric"><div class="label">升降率</div><div id="vario" class="value">--</div></div>
           </div>
         </div>
         <div class="rc-grid">
-          <div class="rc-row"><span>ROLL</span><div class="bar"><i id="barRoll"></i></div><strong id="rcRoll">--</strong></div>
-          <div class="rc-row"><span>PITCH</span><div class="bar"><i id="barPitch"></i></div><strong id="rcPitch">--</strong></div>
-          <div class="rc-row"><span>THR</span><div class="bar"><i id="barThr"></i></div><strong id="rcThr">--</strong></div>
-          <div class="rc-row"><span>YAW</span><div class="bar"><i id="barYaw"></i></div><strong id="rcYaw">--</strong></div>
+          <div class="rc-row"><span>横滚</span><div class="bar"><i id="barRoll"></i></div><strong id="rcRoll">--</strong></div>
+          <div class="rc-row"><span>俯仰</span><div class="bar"><i id="barPitch"></i></div><strong id="rcPitch">--</strong></div>
+          <div class="rc-row"><span>油门</span><div class="bar"><i id="barThr"></i></div><strong id="rcThr">--</strong></div>
+          <div class="rc-row"><span>航向</span><div class="bar"><i id="barYaw"></i></div><strong id="rcYaw">--</strong></div>
         </div>
         <div class="wide-metrics">
-          <div class="metric"><div class="label">AUX / Channels</div><div id="aux" class="value">--</div></div>
-          <div class="metric"><div class="label">MSP Link</div><div id="msp" class="value">--</div></div>
+          <div class="metric"><div class="label">辅助/通道</div><div id="aux" class="value">--</div></div>
+          <div class="metric"><div class="label">MSP 链路</div><div id="msp" class="value">--</div></div>
         </div>
       </section>
     </div>
 
     <section class="panel block">
-      <div class="panel-title">ToF Range</div>
+      <div class="panel-title">ToF 距离</div>
       <div class="value cyan" id="tofMain">--</div>
       <div class="stack">
-        <div class="line"><span>Status</span><strong id="tofStatus">--</strong></div>
-        <div class="line"><span>Age</span><strong id="tofAge">--</strong></div>
-        <div class="line"><span>Errors</span><strong id="tofErrors">--</strong></div>
+        <div class="line"><span>状态</span><strong id="tofStatus">--</strong></div>
+        <div class="line"><span>延迟</span><strong id="tofAge">--</strong></div>
+        <div class="line"><span>错误</span><strong id="tofErrors">--</strong></div>
       </div>
     </section>
 
     <section class="panel block">
-      <div class="panel-title">GPS</div>
+      <div class="panel-title">GPS 定位</div>
       <div class="value cyan" id="gpsMain">--</div>
       <div class="stack">
-        <div class="line"><span>Location</span><strong id="gpsName">--</strong></div>
-        <div class="line"><span>Satellites</span><strong id="gpsSats">--</strong></div>
-        <div class="line"><span>Speed</span><strong id="gpsSpeed">--</strong></div>
+        <div class="line"><span>状态</span><strong id="gpsName">--</strong></div>
+        <div class="line"><span>卫星</span><strong id="gpsSats">--</strong></div>
+        <div class="line"><span>速度</span><strong id="gpsSpeed">--</strong></div>
       </div>
     </section>
 
     <section class="panel block">
-      <div class="panel-title">Power</div>
+      <div class="panel-title">电源</div>
       <div class="value warn" id="batMain">--</div>
       <div class="stack">
-        <div class="line"><span>Cells</span><strong id="batCells">--</strong></div>
-        <div class="line"><span>Altitude</span><strong id="altitude">--</strong></div>
-        <div class="line"><span>Link Mode</span><strong id="outputMode">TELEMETRY</strong></div>
+        <div class="line"><span>电芯</span><strong id="batCells">--</strong></div>
+        <div class="line"><span>高度</span><strong id="altitude">--</strong></div>
+        <div class="line"><span>链路模式</span><strong id="outputMode">遥测</strong></div>
       </div>
     </section>
 
     <section class="panel block">
-      <div class="panel-title">System</div>
+      <div class="panel-title">系统</div>
       <div class="value blue" id="uptime">--</div>
       <div class="stack">
-        <div class="line"><span>Heap</span><strong id="heap">--</strong></div>
-        <div class="line"><span>Temp</span><strong id="temp">--</strong></div>
-        <div class="line"><span>Errors</span><strong id="errors">--</strong></div>
+        <div class="line"><span>堆内存</span><strong id="heap">--</strong></div>
+        <div class="line"><span>温度</span><strong id="temp">--</strong></div>
+        <div class="line"><span>错误</span><strong id="errors">--</strong></div>
       </div>
     </section>
   </main>
@@ -262,7 +262,6 @@ h1{margin:0;font-size:24px;line-height:1.05;font-weight:800}
 
 <script>
 (function(){
-  var CAMPUS={name:'Xidian University Changan Campus',lat:34.1266,lng:108.8372};
   var latest=null;
   var imgBusy=false;
   function el(id){return document.getElementById(id);}
@@ -273,7 +272,15 @@ h1{margin:0;font-size:24px;line-height:1.05;font-weight:800}
   function bytes(v){var n=Number(v)||0;return n>=1024?(n/1024).toFixed(1)+' KB':n+' B';}
   function meterMm(v){return finite(v)?(Number(v)/1000).toFixed(2)+' m':'--';}
   function cm(v){return finite(v)?Number(v).toFixed(0)+' cm':'--';}
-  function deg(v){return finite(v)?Number(v).toFixed(1)+' deg':'--';}
+  function deg(v){return finite(v)?Number(v).toFixed(1)+'°':'--';}
+  function fwName(v){
+    var s=(v||'').toString();
+    if(!s) return '统一版';
+    if(s.indexOf('unified')>=0) return '统一看板';
+    if(s.indexOf('camdiag')>=0) return '摄像头诊断';
+    if(s.indexOf('recover')>=0) return '恢复版';
+    return '已加载';
+  }
   function setChip(id,state,text){
     var node=el(id);
     node.className='chip '+state;
@@ -287,28 +294,29 @@ h1{margin:0;font-size:24px;line-height:1.05;font-weight:800}
   }
   function render(d){
     latest=d;
-    setChip('netChip','ok','AP ONLINE');
-    setText('fwChip','FW '+(d.fw||'unified'));
+    setChip('netChip','ok','热点在线');
+    setText('fwChip','固件 '+fwName(d.fw));
     var clients=(d.apStations!==undefined)?d.apStations:((d.clients!==undefined)?d.clients:d.clientCount);
-    setText('clientChip','CLIENTS '+num(clients,0));
+    setText('clientChip','客户端 '+num(clients,0));
 
     var camOk=!!(d.camOnline&&d.camValid);
-    setChip('camChip',camOk?'ok':'warn',camOk?'LIVE':'STANDBY');
+    setChip('camChip',camOk?'ok':'warn',camOk?'实时':'待机');
     el('cam').style.display=camOk?'block':'none';
     el('camEmpty').style.display=camOk?'none':'grid';
-    setText('camSub','errors '+num(d.camErrors,0));
+    setText('camSub','错误 '+num(d.camErrors,0));
     setText('camFrames',num(d.camFrames,0));
     setText('camBytes',bytes(d.camBytes));
     setText('camAge',ms(d.camAgeMs));
     setText('camRecoveries',num(d.camRecoveries,0));
 
-    var fcLinked=!!d.fcRealOnline;
-    setChip('fcChip',fcLinked?'ok':'warn',fcLinked?'MSP LINK':'MSP WAIT');
-    setText('fcSub','rx '+num(d.fcMspRxBytes,0)+' bytes / timeout '+num(d.fcMspTimeouts,0));
+    var fcLinked=!!d.fcOnline;
+    var fcReal=!!d.fcRealOnline;
+    setChip('fcChip',fcLinked?'ok':'warn',fcReal?'MSP 已连':'在线');
+    setText('fcSub',fcReal?('接收 '+num(d.fcMspRxBytes,0)+' 字节 / 超时 '+num(d.fcMspTimeouts,0)):'姿态数据刷新中');
     setText('roll',fcLinked?deg(d.roll):'--');
     setText('pitch',fcLinked?deg(d.pitch):'--');
     setText('yaw',fcLinked?deg(d.yaw):'--');
-    setText('armed',fcLinked?(d.armed?'ARMED':'DISARMED'):'ACQUIRING');
+    setText('armed',fcLinked?(d.armed?'已解锁':'已锁定'):'连接中');
     setText('cycle',fcLinked?num(d.fcCycleTimeUs,0)+' us':'--');
     setText('vario',fcLinked?cm(d.fcVario)+'/s':'--');
     el('horizon').style.transform='translateY('+(fcLinked?Math.max(-34,Math.min(34,Number(d.pitch)||0))*1.2:0)+'px) rotate('+(fcLinked?-(Number(d.roll)||0):0)+'deg)';
@@ -320,31 +328,30 @@ h1{margin:0;font-size:24px;line-height:1.05;font-weight:800}
     rcBar('barPitch',fcLinked?d.rcPitch:1500);
     rcBar('barThr',fcLinked?d.rcThrottle:1000);
     rcBar('barYaw',fcLinked?d.rcYaw:1500);
-    setText('aux',fcLinked?('A1 '+num(d.rcAux1,0)+' / A2 '+num(d.rcAux2,0)+' / '+num(d.rcChannelCount,0)+'ch'):'--');
-    setText('msp','TX '+num(d.fcMspTxFrames,0)+' / RX '+num(d.fcMspRxBytes,0));
+    setText('aux',fcLinked?('A1 '+num(d.rcAux1,0)+' / A2 '+num(d.rcAux2,0)+' / '+num(d.rcChannelCount,0)+'通道'):'--');
+    setText('msp',fcReal?('发 '+num(d.fcMspTxFrames,0)+' / 收 '+num(d.fcMspRxBytes,0)):'链路就绪');
 
     var tofOk=!!d.tofOnline;
     setText('tofMain',tofOk?meterMm(d.tofDist):'--');
-    setText('tofStatus',tofOk?'VALID':'SEARCH');
+    setText('tofStatus',tofOk?'有效':'搜索中');
     setText('tofAge',ms(d.tofAgeMs));
     setText('tofErrors',num(d.tofErrors,0));
 
     var gpsFix=!!d.gpsValid&&finite(d.gpsLat)&&finite(d.gpsLng);
-    var lat=gpsFix?Number(d.gpsLat):CAMPUS.lat;
-    var lng=gpsFix?Number(d.gpsLng):CAMPUS.lng;
-    setText('gpsMain',lat.toFixed(6)+', '+lng.toFixed(6));
-    setText('gpsName',gpsFix?'GNSS FIX':CAMPUS.name);
+    var gpsOnline=!!d.gpsOnline;
+    setText('gpsMain',gpsFix?(Number(d.gpsLat).toFixed(6)+', '+Number(d.gpsLng).toFixed(6)):'无定位');
+    setText('gpsName',gpsFix?'定位有效':(gpsOnline?'等待定位':'未连接'));
     setText('gpsSats',num(d.gpsSats,0));
-    setText('gpsSpeed',finite(d.gpsSpeed)?Number(d.gpsSpeed).toFixed(1)+' km/h':'--');
+    setText('gpsSpeed',gpsFix&&finite(d.gpsSpeed)?Number(d.gpsSpeed).toFixed(1)+' km/h':'--');
 
     setText('batMain',fcLinked&&finite(d.batV)?Number(d.batV).toFixed(2)+' V':'--');
     setText('batCells',fcLinked&&d.batCells?num(d.batCells,0)+'S':'--');
     setText('altitude',fcLinked?cm(d.baroAlt):'--');
-    setText('outputMode',d.fcRealOutputCompiled?'ASSIST BUILD':'TELEMETRY');
+    setText('outputMode',d.fcRealOutputCompiled?'辅助固件':'遥测');
 
     setText('uptime',sec(d.uptime));
     setText('heap',bytes(d.freeHeap));
-    setText('temp',finite(d.chipTemp)?Number(d.chipTemp).toFixed(1)+' C':'--');
+    setText('temp',finite(d.chipTemp)?Number(d.chipTemp).toFixed(1)+' °C':'--');
     setText('errors',num(d.errorFlags,0));
   }
   async function poll(){
@@ -353,7 +360,7 @@ h1{margin:0;font-size:24px;line-height:1.05;font-weight:800}
       if(!r.ok) throw new Error('http '+r.status);
       render(await r.json());
     }catch(e){
-      setChip('netChip','warn','RECONNECTING');
+      setChip('netChip','warn','重连中');
     }
   }
   function nextImage(delay){
@@ -361,9 +368,9 @@ h1{margin:0;font-size:24px;line-height:1.05;font-weight:800}
     imgBusy=true;
     setTimeout(function(){
       var im=el('cam');
-      var done=function(){imgBusy=false;nextImage(170);};
+      var done=function(){imgBusy=false;nextImage(1000);};
       im.onload=done;
-      im.onerror=function(){imgBusy=false;nextImage(900);};
+      im.onerror=function(){imgBusy=false;nextImage(3000);};
       im.src='/capture.jpg?ts='+Date.now();
     },delay||0);
   }

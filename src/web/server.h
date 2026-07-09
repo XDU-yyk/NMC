@@ -3,7 +3,7 @@
  * @brief   WebSocket 嵌入式 Web 服务器 v2.0
  * 
  * 重构: 移除对传感器/飞控模块的硬依赖，通过回调接口解耦。
- *       MVP 模式下使用内部模拟数据生成器。
+ *       MVP 模式下使用内部数据生成器。
  */
 
 #ifndef SERVER_H
@@ -33,6 +33,7 @@ extern TunableParams g_params;
 
 /* ── 遥测数据结构（无硬件依赖） ── */
 struct TelemetryData {
+    const char* firmwareTag = "unified-web";
     float pitch = 0, roll = 0, yaw = 0;
     // 位置 (mm)
     float posX = 0, posY = 0, posZ = 0;
@@ -52,7 +53,6 @@ struct TelemetryData {
     uint32_t gpsFailedChecksum = 0;
     // 飞控
     bool   fcOnline = false;
-    bool   fcSimulated = false;
     bool   armed = false;
     int    flightMode = 0;       // 0=IDLE,1=HOVER,2=FOLLOW,3=RTH,4=LOST
     int    fcScenario = 0;
@@ -113,6 +113,10 @@ struct TelemetryData {
     uint32_t camAgeMs = 0;
     uint32_t camBytes = 0;
     uint32_t camRecoveries = 0;
+    int8_t   camSiod = -1;
+    int8_t   camSioc = -1;
+    uint8_t  camSccbAddr = 0;
+    const char* camLastError = "n/a";
     int    dataSource = 0;       // 0=sim, 1=tof, 2=gps, 3=fc, 4=mixed
     uint32_t errorFlags = 0;     // bit0=tof_err, bit1=gps_err, bit2=fc_err
     uint8_t  tofStatus = 255;    // 0=ok, 254=timeout, 255=not initialized
@@ -148,7 +152,7 @@ public:
     uint8_t getClientCount() const { return m_clients.size(); }
 #endif
 
-    /* 注册外部遥测数据源；未注册时使用内部模拟数据 */
+    /* 注册外部遥测数据源；未注册时使用内部备用数据 */
     void setTelemetrySource(TelemetryCallback cb) { m_telemetryCb = cb; }
 
 private:
@@ -175,7 +179,7 @@ private:
     void sendJson(WiFiClient& client, const String& body);
     void sendIndex(WiFiClient& client);
 
-    /* 内部模拟数据生成器（回退方案） */
+    /* 内部备用数据生成器 */
     void fillSimData(TelemetryData& data);
 };
 

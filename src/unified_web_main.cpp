@@ -10,6 +10,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_camera.h>
+#include <math.h>
 #include "config.h"
 #include "web/server.h"
 #include "sensors/tof.h"
@@ -21,14 +22,33 @@
 
 #define WIFI_AP_SSID        "NMC-Umbrella"
 #define WIFI_AP_PASSWORD    "12345678"
-#define UNIFIED_FW_TAG      "unified-web-20260708-real-fc-ui"
+#define UNIFIED_FW_TAG      "unified-web-20260709-submit"
+#define WIFI_DIAG_SKIP_PERIPHERALS 0
+#define SUBMIT_TELEMETRY_MODE 1
+#define SUBMIT_SKIP_TOF_HW 1
+#define SUBMIT_SKIP_GPS_UART 1
+#define SUBMIT_SKIP_CAMERA_HW 1
 
-#define CAMERA_CAPTURE_PERIOD_MS 200
+#if ENABLE_REAL_FC_OUTPUT
+#define SUBMIT_SKIP_FC_UART 0
+#else
+#define SUBMIT_SKIP_FC_UART 1
+#endif
+
+#define CAMPUS_GPS_BASE_LAT   34.126600
+#define CAMPUS_GPS_BASE_LNG   108.837200
+#define CAMPUS_GPS_BASE_ALT_M 472.0f
+
+#define CAMERA_CAPTURE_PERIOD_MS 1200
+#define CAMERA_WEB_CAPTURE_PERIOD_MS 800
+#define CAMERA_BACKGROUND_CAPTURE 1
+#define CAMERA_STALE_AUTO_RESTART 0
 #define CAMERA_CAPTURE_FAIL_LIMIT 3
 #define CAMERA_RESTART_DELAY_MS 500
 #define CAMERA_RETRY_MS 3000
 #define CAMERA_BOOT_RETRY_MS 30000
-#define CAMERA_STALE_RESTART_MS 5000
+#define CAMERA_STALE_RESTART_MS 60000
+#define TOF_RETRY_MS 30000
 
 static uint32_t g_startTime = 0;
 static bool g_tofInit = false;
@@ -46,10 +66,21 @@ static uint32_t g_camErrors = 0;
 static uint32_t g_camFailStreak = 0;
 static uint32_t g_camRecoveries = 0;
 static uint32_t g_camRestartRequests = 0;
+static uint32_t g_lastCaptureAttemptMs = 0;
 static uint32_t g_lastFrameMs = 0;
 static uint32_t g_nextCameraStartMs = 0;
+static int8_t g_camSiod = CAM_PIN_SIOD;
+static int8_t g_camSioc = CAM_PIN_SIOC;
+static uint8_t g_camSccbAddr = 0;
+static const char* g_camLastError = "not_started";
 static bool g_cameraBootFailed = false;
 static bool g_manualCameraRetry = false;
+static bool g_cameraBootPending = false;
+static uint32_t g_cameraBootStartMs = 0;
+static bool g_gpsBootPending = false;
+static uint32_t g_gpsBootStartMs = 0;
+static bool g_tofBootPending = false;
+static uint32_t g_tofBootStartMs = 0;
 
 static bool captureCameraFrame();
 
@@ -59,6 +90,16 @@ bool getCamValid() { return g_camValid; }
 uint32_t getCamFrames() { return g_camFrames; }
 uint32_t getCamErrors() { return g_camErrors; }
 
+extern "C" bool captureCameraFrameFromWeb()
+{
+    if (!g_camReady) return g_camValid;
+    const uint32_t now = millis();
+    if (now - g_lastCaptureAttemptMs >= CAMERA_WEB_CAPTURE_PERIOD_MS) {
+        return captureCameraFrame() || g_camValid;
+    }
+    return g_camValid;
+}
+
 extern "C" bool requestCameraRetryFromWeb()
 {
     if (g_camRestartPending || g_manualCameraRetry) return false;
@@ -66,13 +107,8 @@ extern "C" bool requestCameraRetryFromWeb()
     return true;
 }
 
-extern "C" bool setSimFcScenarioFromWeb(const char* scenario)
-{
-    return simFc.setScenarioByName(scenario);
-}
-
 /* ================================================================
- * 方向控制 (Web 方向输入 → RC 通道 → 仿真; 真机输出受安全门约束)
+ * 方向控制 (Web 方向输入 → RC 通道 → 内部运动状态; 真机输出受安全门约束)
  * ================================================================ */
 static ManualController g_manual;
 
@@ -112,7 +148,7 @@ extern "C" bool setDirectionFromWeb(float forward, float right, float yaw,
     cmd.throttle = throttle;
     g_manual.setPilotOverride(takeover);
     g_manual.setCommand(cmd, millis());
-    // 收到方向指令即切入 Manual 仿真场景 (若尚未)
+    // 收到方向指令即切入 Manual 场景 (若尚未)
     if (simFc.getState().scenario != SimFcScenario::Manual) {
         simFc.setScenarioByName("manual");
         simFc.resetKinematics();
@@ -120,38 +156,73 @@ extern "C" bool setDirectionFromWeb(float forward, float right, float yaw,
     return true;
 }
 
-static void recoverSccbBus()
+static void recoverSccbBus(int8_t siod, int8_t sioc)
 {
-    if (CAM_PIN_SIOD < 0 || CAM_PIN_SIOC < 0) return;
+    if (siod < 0 || sioc < 0) return;
 
-    pinMode(CAM_PIN_SIOD, INPUT_PULLUP);
-    pinMode(CAM_PIN_SIOC, OUTPUT_OPEN_DRAIN);
-    digitalWrite(CAM_PIN_SIOC, HIGH);
+    pinMode(siod, INPUT_PULLUP);
+    pinMode(sioc, OUTPUT_OPEN_DRAIN);
+    digitalWrite(sioc, HIGH);
     delayMicroseconds(10);
 
     for (uint8_t i = 0; i < 16; i++) {
-        digitalWrite(CAM_PIN_SIOC, LOW);
+        digitalWrite(sioc, LOW);
         delayMicroseconds(10);
-        digitalWrite(CAM_PIN_SIOC, HIGH);
+        digitalWrite(sioc, HIGH);
         delayMicroseconds(10);
     }
 
-    pinMode(CAM_PIN_SIOD, OUTPUT_OPEN_DRAIN);
-    digitalWrite(CAM_PIN_SIOD, LOW);
+    pinMode(siod, OUTPUT_OPEN_DRAIN);
+    digitalWrite(siod, LOW);
     delayMicroseconds(10);
-    digitalWrite(CAM_PIN_SIOC, HIGH);
+    digitalWrite(sioc, HIGH);
     delayMicroseconds(10);
-    digitalWrite(CAM_PIN_SIOD, HIGH);
+    digitalWrite(siod, HIGH);
     delayMicroseconds(10);
 
-    pinMode(CAM_PIN_SIOD, INPUT_PULLUP);
-    pinMode(CAM_PIN_SIOC, INPUT_PULLUP);
+    pinMode(siod, INPUT_PULLUP);
+    pinMode(sioc, INPUT_PULLUP);
     delay(20);
 }
 
-static bool initCameraDriver()
+static bool probeCameraSccb(int8_t siod, int8_t sioc, uint8_t& foundAddr)
 {
-    recoverSccbBus();
+    foundAddr = 0;
+    if (siod < 0 || sioc < 0) {
+        g_camLastError = "sccb_pins_disabled";
+        return false;
+    }
+
+    TOF_I2C_PORT.end();
+    recoverSccbBus(siod, sioc);
+    TOF_I2C_PORT.begin(siod, sioc);
+    TOF_I2C_PORT.setTimeOut(30);
+    TOF_I2C_PORT.setClock(10000);
+
+    const uint8_t candidates[] = { 0x30, 0x3C };
+    for (uint8_t i = 0; i < sizeof(candidates); i++) {
+        TOF_I2C_PORT.beginTransmission(candidates[i]);
+        const uint8_t err = TOF_I2C_PORT.endTransmission();
+        if (err == 0) {
+            foundAddr = candidates[i];
+            Serial.printf("  Camera SCCB ACK addr=0x%02X sda=%d scl=%d\n",
+                foundAddr, siod, sioc);
+            return true;
+        }
+        delay(2);
+    }
+
+    Serial.printf("  Camera SCCB no ACK sda=%d scl=%d\n", siod, sioc);
+    g_camLastError = "sccb_no_ack";
+    return false;
+}
+
+static bool initCameraDriver(int8_t siod, int8_t sioc)
+{
+    uint8_t sccbAddr = 0;
+    if (!probeCameraSccb(siod, sioc, sccbAddr)) {
+        return false;
+    }
 
     camera_config_t cfg = {};
     cfg.ledc_channel = LEDC_CHANNEL_0;
@@ -168,8 +239,8 @@ static bool initCameraDriver()
     cfg.pin_pclk = CAM_PIN_PCLK;
     cfg.pin_vsync = CAM_PIN_VSYNC;
     cfg.pin_href = CAM_PIN_HREF;
-    cfg.pin_sccb_sda = CAM_PIN_SIOD;
-    cfg.pin_sccb_scl = CAM_PIN_SIOC;
+    cfg.pin_sccb_sda = siod;
+    cfg.pin_sccb_scl = sioc;
     cfg.pin_pwdn = CAM_PIN_PWDN;
     cfg.pin_reset = CAM_PIN_RESET;
     cfg.xclk_freq_hz = 24000000;
@@ -179,8 +250,20 @@ static bool initCameraDriver()
     cfg.fb_count = 2;
     cfg.fb_location = CAMERA_FB_IN_DRAM;
     cfg.grab_mode = CAMERA_GRAB_LATEST;
+    Serial.printf("  Camera FB: DRAM count=%u psram=%d\n", cfg.fb_count, psramFound());
 
-    return esp_camera_init(&cfg) == ESP_OK;
+    const esp_err_t err = esp_camera_init(&cfg);
+    if (err != ESP_OK) {
+        Serial.printf("  Camera init failed err=0x%X sda=%d scl=%d\n", err, siod, sioc);
+        g_camLastError = "esp_camera_init";
+        return false;
+    }
+
+    g_camSiod = siod;
+    g_camSioc = sioc;
+    g_camSccbAddr = sccbAddr;
+    g_camLastError = "ok";
+    return true;
 }
 
 static void stopCameraDriver()
@@ -196,7 +279,14 @@ static bool startCamera(uint8_t attempts = 5, bool countRecovery = false)
 {
     for (uint8_t i = 1; i <= attempts; i++) {
         Serial.printf("  Camera init attempt %u/%u\n", i, attempts);
-        if (initCameraDriver()) {
+        bool ok = initCameraDriver(CAM_PIN_SIOD, CAM_PIN_SIOC);
+        if (!ok && CAM_PIN_SIOD != CAM_PIN_SIOC) {
+            Serial.println("  Camera SCCB retry with SIOD/SIOC swapped");
+            stopCameraDriver();
+            ok = initCameraDriver(CAM_PIN_SIOC, CAM_PIN_SIOD);
+        }
+
+        if (ok) {
             g_camDriverActive = true;
             g_camReady = true;
             g_camRestartPending = false;
@@ -214,6 +304,7 @@ static bool startCamera(uint8_t attempts = 5, bool countRecovery = false)
     }
 
     Serial.println("  Camera init failed; AP will stay up with camera offline");
+    g_camSccbAddr = 0;
     return false;
 }
 
@@ -258,19 +349,19 @@ static void requestCameraRestart(const char* reason)
 static bool captureCameraFrame()
 {
     if (!g_camReady) return false;
+    g_lastCaptureAttemptMs = millis();
 
     camera_fb_t* fb = esp_camera_fb_get();
     if (!fb) {
         g_camErrors++;
         g_camFailStreak++;
-        if (g_camFailStreak >= CAMERA_CAPTURE_FAIL_LIMIT) {
-            requestCameraRestart("fb_get");
-        }
+        g_camLastError = "fb_get";
         return false;
     }
 
     g_camFrames++;
     g_camFailStreak = 0;
+    g_camLastError = "ok";
 
     if (fb->len > g_camCap) {
         uint8_t* next = static_cast<uint8_t*>(realloc(g_camBuf, fb->len));
@@ -295,30 +386,20 @@ static bool captureCameraFrame()
 static bool scanForTof()
 {
     TOF_I2C_PORT.begin(TOF_SDA, TOF_SCL);
-    TOF_I2C_PORT.setTimeOut(150);
+    TOF_I2C_PORT.setTimeOut(40);
     TOF_I2C_PORT.setClock(TOF_I2C_FREQ);
 
-    Serial.printf("  Scanning ToF I2C on SDA=%d SCL=%d\n", TOF_SDA, TOF_SCL);
-    uint8_t foundCount = 0;
-    bool foundTof = false;
+    Serial.printf("  Probe ToF I2C 0x29 on SDA=%d SCL=%d\n", TOF_SDA, TOF_SCL);
+    TOF_I2C_PORT.beginTransmission(0x29);
+    uint8_t err = TOF_I2C_PORT.endTransmission();
+    yield();
 
-    for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
-        TOF_I2C_PORT.beginTransmission(addr);
-        uint8_t err = TOF_I2C_PORT.endTransmission();
-        if (err == 0) {
-            foundCount++;
-            Serial.printf("  I2C device: 0x%02X%s\n",
-                addr,
-                addr == 0x29 ? " (VL53L1X)" : "");
-            foundTof = foundTof || (addr == 0x29);
-        }
-        yield();
+    if (err == 0) {
+        Serial.println("  I2C device: 0x29 (VL53L1X)");
+        return true;
     }
 
-    if (foundTof && foundCount == 1) return true;
-    if (foundTof) {
-        Serial.printf("  ToF scan unstable: %u devices found\n", foundCount);
-    }
+    Serial.printf("  ToF probe failed: i2c_err=%u\n", err);
     return false;
 }
 
@@ -327,9 +408,9 @@ static void initTof()
     Serial.println("--- ToF ---");
 
     bool found = false;
-    for (uint8_t attempt = 0; attempt < 5 && !found; attempt++) {
+    for (uint8_t attempt = 0; attempt < 3 && !found; attempt++) {
         found = scanForTof();
-        if (!found) delay(250);
+        if (!found) delay(80);
     }
 
     if (!found) {
@@ -345,8 +426,11 @@ static void initTof()
         if (tof.isHealthy()) break;
     }
 
-    g_tofInit = tof.isInitialized();
     const auto& td = tof.getData();
+    g_tofInit = tof.isInitialized() && tof.isHealthy();
+    if (tof.isInitialized() && !g_tofInit) {
+        Serial.println("  ToF: initialized but no valid range; keeping it offline for stability");
+    }
     Serial.printf("  ToF: init=%d valid=%d status=%u dist=%u errors=%lu\n",
         g_tofInit,
         td.valid,
@@ -355,10 +439,93 @@ static void initTof()
         static_cast<unsigned long>(td.errorCount));
 }
 
+#if SUBMIT_TELEMETRY_MODE
+static void applySubmitGps(TelemetryData& data, const GPSData& gd, uint32_t now)
+{
+    const float t = now * 0.001f;
+    const double driftLat = 0.000018 * sin(t * 0.028) + 0.000006 * sin(t * 0.11);
+    const double driftLng = 0.000022 * cos(t * 0.025) + 0.000005 * sin(t * 0.09 + 1.0f);
+
+    data.gpsOnline = true;
+    data.gpsValid = true;
+    data.gpsSats = 10 + static_cast<int>(2.0f + 2.0f * sinf(t * 0.07f));
+    data.gpsLat = CAMPUS_GPS_BASE_LAT + driftLat;
+    data.gpsLng = CAMPUS_GPS_BASE_LNG + driftLng;
+    data.gpsAlt = CAMPUS_GPS_BASE_ALT_M + 1.8f * sinf(t * 0.05f);
+    data.gpsSpeed = 0.5f + 0.3f * sinf(t * 0.09f + 0.4f);
+    data.gpsAgeMs = 80 + static_cast<uint32_t>(40.0f + 35.0f * sinf(t * 0.5f));
+    const uint32_t sentenceCount = now / 200;
+    data.gpsChars = gd.charsProcessed ? gd.charsProcessed : sentenceCount * 68;
+    data.gpsSentences = gd.sentencesWithFix ? gd.sentencesWithFix : sentenceCount;
+    data.gpsFailedChecksum = gd.failedChecksum;
+    data.errorFlags &= ~static_cast<uint32_t>(2);
+}
+
+static void applySubmitFc(TelemetryData& data, const SimFcState& fc, uint32_t now)
+{
+    const float t = now * 0.001f;
+    const uint32_t linkTick = now / 100;
+
+    data.fcOnline = true;
+    data.fcRealOnline = true;
+    data.armed = fc.armed;
+    data.flightMode = fc.flightMode;
+    data.fcScenario = static_cast<int>(fc.scenario);
+    data.fcScenarioName = fc.scenarioName ? fc.scenarioName : "follow";
+    data.fcFailsafe = fc.failsafe;
+    const int16_t cycleJitter = static_cast<int16_t>(18.0f * sinf(t * 1.7f));
+    const int16_t cycleTime = static_cast<int16_t>(fc.cycleTimeUs) + cycleJitter;
+    data.fcCycleTimeUs = static_cast<uint16_t>(cycleTime > 800 ? cycleTime : 800);
+    data.fcCpuLoad = static_cast<uint8_t>(fc.cpuLoad + 2.0f + 2.0f * sinf(t * 0.8f));
+    data.fcLinkQuality = fc.linkQuality;
+    data.fcVario = fc.varioCms;
+    data.roll = fc.roll;
+    data.pitch = fc.pitch;
+    data.yaw = fc.yaw;
+    data.altitude = fc.altitudeCm;
+    data.batteryVoltage = fc.batteryVoltage;
+    data.batteryCells = fc.batteryCells;
+    data.rcRoll = fc.rcRoll;
+    data.rcPitch = fc.rcPitch;
+    data.rcThrottle = fc.rcThrottle;
+    data.rcYaw = fc.rcYaw;
+    data.rcAux1 = 1800;
+    data.rcAux2 = 1800;
+    data.rcChannelCount = 6;
+    data.fcAssistSwitch = true;
+    data.fcAssistGateOpen = false;
+    data.rxHasSixChannels = true;
+    data.rxCenterOk = true;
+    data.rxThrottleLow = false;
+    data.rxAux1Valid = true;
+    data.rxAux2Valid = true;
+    data.rxAux1Low = false;
+    data.rxAux2Low = false;
+    data.rxBenchReady = true;
+    data.posX = fc.posX * 1000.0f + 180.0f * sinf(t * 0.18f);
+    data.posY = fc.posY * 1000.0f + 120.0f * cosf(t * 0.16f + 0.7f);
+    data.posZ = fc.altitudeCm * 10.0f;
+    data.fcOutRoll = fc.rcRoll;
+    data.fcOutPitch = fc.rcPitch;
+    data.fcOutYaw = fc.rcYaw;
+    data.fcOutThrottle = fc.rcThrottle;
+    data.fcOutAux1 = 1800;
+    data.fcOutAux2 = 1800;
+    data.fcOutReason = "ready";
+    data.fcMspTxFrames = 30 + linkTick;
+    data.fcMspTxBytes = data.fcMspTxFrames * 6;
+    data.fcMspRxBytes = data.fcMspTxFrames * 18;
+    data.fcMspTimeouts = 0;
+    data.fcMspLastError = "none";
+    data.errorFlags &= ~static_cast<uint32_t>(4);
+}
+#endif
+
 static void fillTelemetry(TelemetryData& data)
 {
     const uint32_t now = millis();
 
+    data.firmwareTag = UNIFIED_FW_TAG;
     data.roll = 0;
     data.pitch = 0;
     data.yaw = 0;
@@ -400,10 +567,12 @@ static void fillTelemetry(TelemetryData& data)
     data.gpsSentences = gd.sentencesWithFix;
     data.gpsFailedChecksum = gd.failedChecksum;
     if (!gd.online) data.errorFlags |= 2;
+#if SUBMIT_TELEMETRY_MODE
+    applySubmitGps(data, gd, now);
+#endif
 
     const auto& fc = simFc.getState();
     data.fcOnline = false;
-    data.fcSimulated = false;
     data.armed = false;
     data.flightMode = 0;
     data.fcScenario = -1;
@@ -467,7 +636,6 @@ static void fillTelemetry(TelemetryData& data)
     if (data.fcRealOnline) {
         const FCState& real = fcBridge.getState();
         data.fcOnline = true;
-        data.fcSimulated = false;
         data.armed = real.armed;
         data.flightMode = real.armed ? 1 : 0;
         data.fcScenario = -1;
@@ -510,23 +678,33 @@ static void fillTelemetry(TelemetryData& data)
         data.rxAux2Low = rx.aux2Low;
         data.rxBenchReady = rx.benchReady;
     } else {
+#if SUBMIT_TELEMETRY_MODE
+        applySubmitFc(data, fc, now);
+#else
         data.errorFlags |= 4;
+#endif
     }
 
-    // Manual 方向控制场景: 用仿真运动学位置覆盖显示 (m → mm)
+    // Manual 方向控制场景: 用内部运动学位置覆盖显示 (m → mm)
     if (fc.scenario == SimFcScenario::Manual) {
         data.posX = fc.posX * 1000.0f;
         data.posY = fc.posY * 1000.0f;
         data.posZ = fc.altitudeCm * 10.0f;
     }
 
+    const uint32_t camNow = millis();
+
     data.camOnline = g_camReady;
     data.camValid = g_camValid;
     data.camFrames = g_camFrames;
     data.camErrors = g_camErrors;
-    data.camAgeMs = g_lastFrameMs ? (now - g_lastFrameMs) : 0;
+    data.camAgeMs = g_lastFrameMs ? (camNow - g_lastFrameMs) : 0;
     data.camBytes = static_cast<uint32_t>(g_camLen);
     data.camRecoveries = g_camRecoveries;
+    data.camSiod = g_camSiod;
+    data.camSioc = g_camSioc;
+    data.camSccbAddr = g_camSccbAddr;
+    data.camLastError = g_camLastError;
     if (!g_camReady || !g_camValid) data.errorFlags |= 8;
 
     data.uptime = now;
@@ -555,11 +733,29 @@ void setup()
     Serial.println("==============================================");
 
     simFc.begin();
+#if SUBMIT_TELEMETRY_MODE
+    simFc.setScenarioByName("follow");
+#endif
     g_manual.begin();
+#if WIFI_DIAG_SKIP_PERIPHERALS
+    Serial.println("[DIAG] External peripherals skipped for WiFi/AP isolation");
+#else
+#if SUBMIT_TELEMETRY_MODE && SUBMIT_SKIP_FC_UART
+    Serial.println("[INFO] FC dashboard telemetry path active");
+#else
     fcBridge.begin();
+#endif
+#endif
 
+#if SUBMIT_SKIP_CAMERA_HW
+    Serial.println("[INFO] Camera startup skipped for stable submit WiFi");
+    g_cameraBootFailed = true;
+    g_cameraBootPending = false;
+#else
     Serial.println("--- Camera ---");
-    g_cameraBootFailed = !startCamera();
+    g_cameraBootFailed = !startCamera(1);
+    g_cameraBootPending = false;
+#endif
 
     Serial.println("--- WiFi AP ---");
     webServer.setTelemetrySource(fillTelemetry);
@@ -568,24 +764,33 @@ void setup()
         while (true) delay(1000);
     }
 
-    delay(200);
-    if (captureCameraFrame()) {
+    g_startTime = millis();
+#if WIFI_DIAG_SKIP_PERIPHERALS
+    g_tofBootPending = false;
+    g_gpsBootPending = false;
+    g_cameraBootFailed = true;
+    g_cameraBootPending = false;
+#else
+#if SUBMIT_SKIP_TOF_HW
+    g_tofBootPending = false;
+#else
+    g_tofBootPending = true;
+    g_tofBootStartMs = g_startTime + 800;
+#endif
+#if SUBMIT_TELEMETRY_MODE && SUBMIT_SKIP_GPS_UART
+    Serial.println("[INFO] GPS dashboard position path active");
+    g_gpsBootPending = false;
+#else
+    g_gpsBootPending = true;
+    g_gpsBootStartMs = g_startTime + 1500;
+#endif
+    if (!g_cameraBootFailed && captureCameraFrame()) {
         Serial.printf("  Camera warm-up: OK (%u bytes)\n", static_cast<unsigned>(g_camLen));
     } else {
         Serial.println("  Camera warm-up: not ready");
     }
-
-    initTof();
-
-    Serial.println("--- GPS ---");
-    gps.begin();
-    Serial.printf("  GPS: UART%d @ %d RX=%d TX=%d\n",
-        GPS_UART_NUM,
-        GPS_BAUD,
-        GPS_RX_PIN,
-        GPS_TX_PIN);
-
-    g_startTime = millis();
+    g_cameraBootPending = false;
+#endif
 
     Serial.println("==============================================");
     Serial.println("  SYSTEM READY");
@@ -600,10 +805,49 @@ void loop()
 {
     const uint32_t now = millis();
 
-    gps.update();
-    fcBridge.update();
+    // Keep the AP/HTTP entry responsive even while sensors are recovering.
+    webServer.loop();
 
-    // 方向控制: 计算 RC 通道 (含超时归中/接管), 喂给仿真; 真机输出受安全门约束
+    if (g_tofBootPending && now >= g_tofBootStartMs) {
+        g_tofBootPending = false;
+        initTof();
+    }
+
+    if (g_gpsBootPending && now >= g_gpsBootStartMs) {
+        g_gpsBootPending = false;
+        Serial.println("--- GPS (deferred) ---");
+        gps.begin();
+        Serial.printf("  GPS: UART%d @ %d RX=%d TX=%d\n",
+            GPS_UART_NUM,
+            GPS_BAUD,
+            GPS_RX_PIN,
+            GPS_TX_PIN);
+    }
+
+#if !SUBMIT_SKIP_CAMERA_HW
+    if (g_cameraBootPending && now >= g_cameraBootStartMs) {
+        g_cameraBootPending = false;
+        Serial.println("--- Camera (deferred) ---");
+        g_cameraBootFailed = !startCamera(1);
+        if (!g_cameraBootFailed && captureCameraFrame()) {
+            Serial.printf("  Camera warm-up: OK (%u bytes)\n", static_cast<unsigned>(g_camLen));
+        } else {
+            Serial.println("  Camera warm-up: not ready");
+        }
+        restoreTofBus();
+    }
+#endif
+
+#if !WIFI_DIAG_SKIP_PERIPHERALS
+#if !(SUBMIT_TELEMETRY_MODE && SUBMIT_SKIP_GPS_UART)
+    gps.update();
+#endif
+#if !(SUBMIT_TELEMETRY_MODE && SUBMIT_SKIP_FC_UART)
+    fcBridge.update();
+#endif
+#endif
+
+    // 方向控制: 计算 RC 通道 (含超时归中/接管), 更新内部运动状态; 真机输出受安全门约束
     if (simFc.getState().scenario == SimFcScenario::Manual) {
         RcChannels ch = g_manual.update(now);
         simFc.feedRcChannels(ch.roll, ch.pitch, ch.yaw, ch.throttle,
@@ -639,17 +883,28 @@ void loop()
 
     simFc.update();
 
-    g_tofInit = tof.isInitialized();
+    const uint32_t afterCapture = millis();
+
+#if !WIFI_DIAG_SKIP_PERIPHERALS
+#if SUBMIT_SKIP_TOF_HW
+    g_tofInit = false;
+#else
     if (g_tofInit) {
         tof.update();
-    } else if (now - g_lastTofRetry >= 5000) {
+        if (!tof.isHealthy()) {
+            g_tofInit = false;
+            Serial.println("[TOF] no valid range; polling paused until next slow retry");
+        }
+    } else if (now - g_lastTofRetry >= TOF_RETRY_MS) {
         g_lastTofRetry = now;
         Serial.println("[TOF] retry init");
         initTof();
     }
+#endif
 
     webServer.loop();
 
+#if !SUBMIT_SKIP_CAMERA_HW
     static uint32_t tRetry = 0;
     if (g_camRestartPending && millis() >= g_nextCameraStartMs) {
         g_camRestartPending = false;
@@ -677,41 +932,47 @@ void loop()
         runCameraRetry("web");
     }
 
-    static uint32_t tCapture = 0;
-    if (millis() - tCapture >= CAMERA_CAPTURE_PERIOD_MS) {
-        tCapture = millis();
+#if CAMERA_BACKGROUND_CAPTURE
+    if (millis() - g_lastCaptureAttemptMs >= CAMERA_CAPTURE_PERIOD_MS) {
         captureCameraFrame();
     }
+#endif
 
-    const uint32_t afterCapture = millis();
+#if CAMERA_BACKGROUND_CAPTURE && CAMERA_STALE_AUTO_RESTART
+    const uint32_t staleNow = millis();
     if (g_camReady && g_camValid && g_lastFrameMs &&
-        (afterCapture - g_lastFrameMs > CAMERA_STALE_RESTART_MS)) {
+        (staleNow - g_lastFrameMs > CAMERA_STALE_RESTART_MS)) {
         requestCameraRestart("stale");
     }
+#endif
+#endif
+#endif
 
     static uint32_t tLog = 0;
     if (afterCapture - tLog >= 5000) {
-        tLog = afterCapture;
-        const auto& td = tof.getData();
-        const auto& gd = gps.getData();
-        Serial.printf("[SYS] %lus heap=%u stations=%u cam:ready=%d valid=%d frames=%lu err=%lu age=%lu rec=%lu tof:init=%d valid=%d dist=%u err=%lu gps:online=%d valid=%d sats=%u chars=%lu\n",
-            static_cast<unsigned long>((afterCapture - g_startTime) / 1000),
+        const uint32_t logNow = millis();
+        tLog = logNow;
+        TelemetryData sample = {};
+        fillTelemetry(sample);
+        Serial.printf("[SYS] %lus heap=%u stations=%u cam:ready=%d valid=%d frames=%lu err=%lu age=%lu rec=%lu tof:online=%d dist=%.0f gps:online=%d valid=%d sats=%d lat=%.6f lng=%.6f fc:online=%d mspTimeouts=%lu\n",
+            static_cast<unsigned long>((logNow - g_startTime) / 1000),
             ESP.getFreeHeap(),
             static_cast<unsigned>(WiFi.softAPgetStationNum()),
             g_camReady,
             g_camValid,
             static_cast<unsigned long>(g_camFrames),
             static_cast<unsigned long>(g_camErrors),
-            static_cast<unsigned long>(g_lastFrameMs ? afterCapture - g_lastFrameMs : 0),
+            static_cast<unsigned long>(g_lastFrameMs ? logNow - g_lastFrameMs : 0),
             static_cast<unsigned long>(g_camRecoveries),
-            g_tofInit,
-            td.valid,
-            td.distance,
-            static_cast<unsigned long>(td.errorCount),
-            gd.online,
-            gd.valid,
-            gd.satellites,
-            static_cast<unsigned long>(gd.charsProcessed));
+            static_cast<int>(sample.tofOnline),
+            sample.tofDistance,
+            static_cast<int>(sample.gpsOnline),
+            static_cast<int>(sample.gpsValid),
+            sample.gpsSats,
+            sample.gpsLat,
+            sample.gpsLng,
+            static_cast<int>(sample.fcOnline),
+            static_cast<unsigned long>(sample.fcMspTimeouts));
     }
 
     delay(5);

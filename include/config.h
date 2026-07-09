@@ -95,8 +95,8 @@
 #define CAM_PIN_PWDN        -1      // 未使用
 #define CAM_PIN_RESET       -1      // 未使用 (或接 GPIO -1 表示软复位)
 #define CAM_PIN_XCLK        -1      // 模块自带晶振，不接
-#define CAM_PIN_SIOD        1       // SCCB SDA
-#define CAM_PIN_SIOC        2       // SCCB SCL
+#define CAM_PIN_SIOD        2       // SCCB SDA / SIOD (verified on current wiring)
+#define CAM_PIN_SIOC        1       // SCCB SCL / SIOC (verified on current wiring)
 #define CAM_PIN_Y9          39      // D7
 #define CAM_PIN_Y8          41      // D6
 #define CAM_PIN_Y7          42      // D5
