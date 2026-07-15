@@ -16,6 +16,7 @@
 - 当前已在 `platformio.ini` 的 `[env:esp32-s3-ov5640-diag]` 加入：
   - `-pipe`
   - `-DARDUINO_LOOP_STACK_SIZE=16384`
+- 当前 `src/ov5640_diag_main.cpp` 已把 `esp_camera_init`、`esp_camera_fb_get` 和恢复逻辑移入独立的 `cam_worker` 任务（16KB）。HTTP 只读取受互斥锁保护的 JPEG 缓存，不再直接调用 camera driver。
 - 本次 Codex 环境里 xtensa 工具链被 Windows 权限限制，assembler/linker 不能写子目录目标文件，所以未能完成本机编译和烧录验证。这是本地执行环境问题，不是源码语法错误。
 
 ## 硬件检查顺序
@@ -68,7 +69,7 @@ $env:TMPDIR='D:\Code\NMC\tmp'
 
 失败分支：
 
-- 如果仍然栈溢出：把 warm-up/取帧移到独立 FreeRTOS task，栈至少 16384，主 loop 只处理 Web。
+- 如果当前 `cam_worker` 版本仍然栈溢出：先保存完整串口日志和复位前最后一行；不要再增加第二个取帧任务。
 - 如果不重启但 `fb_get` 一直失败：先按硬件检查顺序查并口数据线、PCLK、VSYNC、HREF、XCLK/晶振和供电。
 - 如果诊断环境成功，再把同一套 camera config 和启动顺序回灌到 `esp32-s3-unified-web`，并把 `SUBMIT_SKIP_CAMERA_HW` 改为 `0` 做统一网页验证。
 
@@ -96,7 +97,7 @@ $env:TMPDIR='D:\Code\NMC\tmp'
 1. 稳定版 esp32-s3-unified-web 为了保证 WiFi，暂时 SUBMIT_SKIP_CAMERA_HW=1。
 2. 摄像头 SCCB 能读到 ACK/PID，曾出现 addr=0x30、PID=0x0026，所以控制链路大概率通。
 3. 故障集中在 esp_camera_fb_get/warm-up/DMA 取帧阶段。
-4. 之前 camera diag 在 loopTask 附近栈溢出，所以 platformio.ini 的 [env:esp32-s3-ov5640-diag] 已补 -pipe 和 -DARDUINO_LOOP_STACK_SIZE=16384。
+4. 之前 camera diag 在 loopTask 附近栈溢出，所以 platformio.ini 的 [env:esp32-s3-ov5640-diag] 已补 -pipe 和 -DARDUINO_LOOP_STACK_SIZE=16384。当前源码还把全部 camera driver 调用移入 16KB 的 cam_worker，HTTP 只发送缓存；不要重复添加第二个抓帧任务。
 5. Codex 当前环境里 xtensa assembler/linker 不能写子目录目标文件，导致未能完成本地编译烧录；请在普通 Windows 终端或你可用的构建环境里先编译上传诊断固件。
 
 请按这个顺序做：
