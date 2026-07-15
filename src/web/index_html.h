@@ -368,9 +368,9 @@ h1{margin:0;font-size:24px;line-height:1.05;font-weight:800}
     imgBusy=true;
     setTimeout(function(){
       var im=el('cam');
-      var done=function(){imgBusy=false;nextImage(1000);};
+      var done=function(){imgBusy=false;nextImage(250);};
       im.onload=done;
-      im.onerror=function(){imgBusy=false;nextImage(3000);};
+      im.onerror=function(){imgBusy=false;nextImage(1500);};
       im.src='/capture.jpg?ts='+Date.now();
     },delay||0);
   }

@@ -9,6 +9,7 @@
 #include "web/server.h"
 #include "web/index_html.h"
 #include <esp_wifi.h>
+#include <stdlib.h>
 #include <string.h>
 
 WebServerManager webServer;
@@ -22,6 +23,7 @@ extern bool     getCamValid();
 extern uint32_t getCamFrames();
 extern uint32_t getCamErrors();
 extern "C" bool captureCameraFrameFromWeb() __attribute__((weak));
+extern "C" bool copyCameraFrameForWeb(uint8_t** jpeg, size_t* jpegLen) __attribute__((weak));
 extern "C" bool requestCameraRetryFromWeb() __attribute__((weak));
 #endif
 /* 方向意图 HTTP 入口 (unified-web 为 HTTP-only, 无 WebSocket)。
@@ -350,19 +352,18 @@ void WebServerManager::handleHttpRequest(WiFiClient& client)
     }
     else if (requestLine.startsWith("GET /capture.jpg") || requestLine.startsWith("GET /capture.jpeg"))
     {
-        if (captureCameraFrameFromWeb) {
-            (void)captureCameraFrameFromWeb();
-        }
-        if (!getCamValid()) {
+        uint8_t* jpeg = nullptr;
+        size_t len = 0;
+        if (!copyCameraFrameForWeb || !copyCameraFrameForWeb(&jpeg, &len)) {
             sendText(client, "no frame\n");
         } else {
-            size_t len = getCamLen();
             client.printf("HTTP/1.0 200 OK\r\n");
             client.printf("Content-Type: image/jpeg\r\n");
             client.printf("Content-Length: %u\r\n", len);
             client.printf("Cache-Control: no-store\r\n");
             client.printf("Connection: close\r\n\r\n");
-            client.write(getCamBuf(), len);
+            client.write(jpeg, len);
+            free(jpeg);
             client.flush();
         }
     }
@@ -378,16 +379,18 @@ void WebServerManager::handleHttpRequest(WiFiClient& client)
         uint32_t lastSend = 0;
         while (client.connected()) {
             if (millis() - lastSend < 100) { delay(5); continue; }
-            if (captureCameraFrameFromWeb) {
-                (void)captureCameraFrameFromWeb();
+            uint8_t* jpeg = nullptr;
+            size_t len = 0;
+            if (!copyCameraFrameForWeb || !copyCameraFrameForWeb(&jpeg, &len)) {
+                delay(10);
+                continue;
             }
-            if (!getCamValid()) { delay(10); continue; }
             lastSend = millis();
-            size_t len = getCamLen();
             int hlen = snprintf(head, sizeof(head),
                 "\r\n--jpgframe\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", len);
             client.write((uint8_t*)head, hlen);
-            client.write(getCamBuf(), len);
+            client.write(jpeg, len);
+            free(jpeg);
         }
     }
 #endif

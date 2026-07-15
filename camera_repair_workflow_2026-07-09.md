@@ -60,6 +60,13 @@ $env:TMPDIR='D:\Code\NMC\tmp'
 & 'C:\Users\yyk\.platformio\penv\Scripts\platformio.exe' device monitor --port COM55 --baud 115200 --echo
 ```
 
+## 2026-07-15 实测更新
+
+- `esp32-s3-ov5640-diag` 已在 COM55 实测稳定：`PID=0x0026`、首帧成功、连续 25 秒约 5 fps、`errors=0`、没有 `loopTask` 栈溢出或恢复循环。
+- 已将相同 worker 模式回灌到 `esp32-s3-unified-web`：`SUBMIT_SKIP_CAMERA_HW=0`，最终 AP 保持 `NMC-Umbrella`，相机驱动只在 `cam_worker` 中运行，网页只发送锁保护的 JPEG 缓存副本。
+- 统一固件已构建并烧录到 COM55。串口连续 30 秒显示 `cam:ready=1 valid=1`、帧率约 5 fps、`err=0`、内存稳定，且 GPS/FC 遥测保持在线。
+- 未完成的唯一验收项是手机连接 `NMC-Umbrella` 后，在 `http://192.168.4.1/` 实际看到持续更新的画面，并确认 `/capture.jpg` 请求让网页端正常显示。
+
 通过标准：
 
 - 不再出现 `Stack canary watchpoint triggered (loopTask)`。

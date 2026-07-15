@@ -10,6 +10,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_camera.h>
+#include <freertos/semphr.h>
 #include <math.h>
 #include "config.h"
 #include "web/server.h"
@@ -22,12 +23,12 @@
 
 #define WIFI_AP_SSID        "NMC-Umbrella"
 #define WIFI_AP_PASSWORD    "12345678"
-#define UNIFIED_FW_TAG      "unified-web-20260709-submit"
+#define UNIFIED_FW_TAG      "unified-web-20260715-camera"
 #define WIFI_DIAG_SKIP_PERIPHERALS 0
 #define SUBMIT_TELEMETRY_MODE 1
 #define SUBMIT_SKIP_TOF_HW 1
 #define SUBMIT_SKIP_GPS_UART 1
-#define SUBMIT_SKIP_CAMERA_HW 1
+#define SUBMIT_SKIP_CAMERA_HW 0
 
 #if ENABLE_REAL_FC_OUTPUT
 #define SUBMIT_SKIP_FC_UART 0
@@ -39,7 +40,7 @@
 #define CAMPUS_GPS_BASE_LNG   108.837200
 #define CAMPUS_GPS_BASE_ALT_M 472.0f
 
-#define CAMERA_CAPTURE_PERIOD_MS 1200
+#define CAMERA_CAPTURE_PERIOD_MS 200
 #define CAMERA_WEB_CAPTURE_PERIOD_MS 800
 #define CAMERA_BACKGROUND_CAPTURE 1
 #define CAMERA_STALE_AUTO_RESTART 0
@@ -60,6 +61,7 @@ static size_t g_camCap = 0;
 static bool g_camValid = false;
 static bool g_camReady = false;
 static bool g_camDriverActive = false;
+static bool g_camFirstFrameLogged = false;
 static bool g_camRestartPending = false;
 static uint32_t g_camFrames = 0;
 static uint32_t g_camErrors = 0;
@@ -81,8 +83,20 @@ static bool g_gpsBootPending = false;
 static uint32_t g_gpsBootStartMs = 0;
 static bool g_tofBootPending = false;
 static uint32_t g_tofBootStartMs = 0;
+static SemaphoreHandle_t g_camCacheMutex = nullptr;
+static TaskHandle_t g_cameraTask = nullptr;
 
 static bool captureCameraFrame();
+
+static bool lockCamCache(TickType_t waitTicks = portMAX_DELAY)
+{
+    return g_camCacheMutex && xSemaphoreTake(g_camCacheMutex, waitTicks) == pdTRUE;
+}
+
+static void unlockCamCache()
+{
+    if (g_camCacheMutex) xSemaphoreGive(g_camCacheMutex);
+}
 
 uint8_t* getCamBuf() { return g_camBuf; }
 size_t getCamLen() { return g_camLen; }
@@ -92,11 +106,6 @@ uint32_t getCamErrors() { return g_camErrors; }
 
 extern "C" bool captureCameraFrameFromWeb()
 {
-    if (!g_camReady) return g_camValid;
-    const uint32_t now = millis();
-    if (now - g_lastCaptureAttemptMs >= CAMERA_WEB_CAPTURE_PERIOD_MS) {
-        return captureCameraFrame() || g_camValid;
-    }
     return g_camValid;
 }
 
@@ -246,7 +255,7 @@ static bool initCameraDriver(int8_t siod, int8_t sioc)
     cfg.xclk_freq_hz = 24000000;
     cfg.pixel_format = PIXFORMAT_JPEG;
     cfg.frame_size = FRAMESIZE_QQVGA;
-    cfg.jpeg_quality = 20;
+    cfg.jpeg_quality = 15;
     cfg.fb_count = 2;
     cfg.fb_location = CAMERA_FB_IN_DRAM;
     cfg.grab_mode = CAMERA_GRAB_LATEST;
@@ -289,6 +298,7 @@ static bool startCamera(uint8_t attempts = 5, bool countRecovery = false)
         if (ok) {
             g_camDriverActive = true;
             g_camReady = true;
+            g_camFirstFrameLogged = false;
             g_camRestartPending = false;
             g_camFailStreak = 0;
             if (countRecovery) g_camRecoveries++;
@@ -363,10 +373,17 @@ static bool captureCameraFrame()
     g_camFailStreak = 0;
     g_camLastError = "ok";
 
+    if (!lockCamCache()) {
+        g_camErrors++;
+        esp_camera_fb_return(fb);
+        return false;
+    }
+
     if (fb->len > g_camCap) {
         uint8_t* next = static_cast<uint8_t*>(realloc(g_camBuf, fb->len));
         if (!next) {
             g_camErrors++;
+            unlockCamCache();
             esp_camera_fb_return(fb);
             return false;
         }
@@ -374,13 +391,94 @@ static bool captureCameraFrame()
         g_camCap = fb->len;
     }
 
-    memcpy(g_camBuf, fb->buf, fb->len);
-    g_camLen = fb->len;
-    g_camValid = true;
-    g_lastFrameMs = millis();
+    bool firstFrame = false;
+    const size_t frameLen = fb->len;
+    if (g_camBuf) {
+        memcpy(g_camBuf, fb->buf, fb->len);
+        g_camLen = fb->len;
+        g_camValid = true;
+        g_lastFrameMs = millis();
+        if (!g_camFirstFrameLogged) {
+            g_camFirstFrameLogged = true;
+            firstFrame = true;
+        }
+    }
 
+    unlockCamCache();
     esp_camera_fb_return(fb);
+    if (firstFrame) {
+        Serial.printf("  Camera first frame: OK (%u bytes)\n", static_cast<unsigned>(frameLen));
+    }
     return true;
+}
+
+extern "C" bool copyCameraFrameForWeb(uint8_t** jpeg, size_t* jpegLen)
+{
+    if (!jpeg || !jpegLen) return false;
+    *jpeg = nullptr;
+    *jpegLen = 0;
+    if (!lockCamCache(pdMS_TO_TICKS(50))) return false;
+    if (g_camValid && g_camBuf && g_camLen > 0) {
+        uint8_t* copy = static_cast<uint8_t*>(malloc(g_camLen));
+        if (copy) {
+            memcpy(copy, g_camBuf, g_camLen);
+            *jpeg = copy;
+            *jpegLen = g_camLen;
+        }
+    }
+    unlockCamCache();
+    return *jpeg != nullptr;
+}
+
+static void cameraWorker(void*)
+{
+    Serial.printf("[CAM] worker started on core %d\n", xPortGetCoreID());
+    g_cameraBootFailed = !startCamera(1);
+    restoreTofBus();
+
+    uint32_t lastCaptureMs = 0;
+    uint32_t lastRetryMs = millis();
+    uint32_t lastBootRetryMs = 0;
+    for (;;) {
+        uint32_t now = millis();
+        if (g_manualCameraRetry) {
+            g_manualCameraRetry = false;
+            runCameraRetry("web");
+            lastRetryMs = now;
+        } else if (g_camRestartPending && now >= g_nextCameraStartMs) {
+            g_camRestartPending = false;
+            lastRetryMs = now;
+            if (startCamera(2, true)) g_cameraBootFailed = false;
+            restoreTofBus();
+        } else if (!g_cameraBootFailed && !g_camReady && !g_camRestartPending &&
+                   now - lastRetryMs >= CAMERA_RETRY_MS) {
+            lastRetryMs = now;
+            stopCameraDriver();
+            if (startCamera(1, true)) g_cameraBootFailed = false;
+            restoreTofBus();
+        } else if (g_cameraBootFailed && !g_camReady && !g_camRestartPending &&
+                   WiFi.softAPgetStationNum() > 0 &&
+                   (lastBootRetryMs == 0 || now - lastBootRetryMs >= CAMERA_BOOT_RETRY_MS)) {
+            lastBootRetryMs = now;
+            runCameraRetry("connected-client");
+        }
+
+#if CAMERA_BACKGROUND_CAPTURE
+        if (g_camReady && now - lastCaptureMs >= CAMERA_CAPTURE_PERIOD_MS) {
+            lastCaptureMs = now;
+            captureCameraFrame();
+        }
+#endif
+
+#if CAMERA_BACKGROUND_CAPTURE && CAMERA_STALE_AUTO_RESTART
+        now = millis();
+        if (g_camReady && g_camValid && g_lastFrameMs &&
+            now >= g_lastFrameMs && now - g_lastFrameMs > CAMERA_STALE_RESTART_MS) {
+            requestCameraRestart("stale");
+        }
+#endif
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
 }
 
 static bool scanForTof()
@@ -752,8 +850,7 @@ void setup()
     g_cameraBootFailed = true;
     g_cameraBootPending = false;
 #else
-    Serial.println("--- Camera ---");
-    g_cameraBootFailed = !startCamera(1);
+    Serial.println("[CAM] worker will start after WiFi AP is ready");
     g_cameraBootPending = false;
 #endif
 
@@ -784,11 +881,18 @@ void setup()
     g_gpsBootPending = true;
     g_gpsBootStartMs = g_startTime + 1500;
 #endif
-    if (!g_cameraBootFailed && captureCameraFrame()) {
-        Serial.printf("  Camera warm-up: OK (%u bytes)\n", static_cast<unsigned>(g_camLen));
+#if !SUBMIT_SKIP_CAMERA_HW
+    g_camCacheMutex = xSemaphoreCreateMutex();
+    if (g_camCacheMutex) {
+        const BaseType_t taskOk = xTaskCreatePinnedToCore(
+            cameraWorker, "cam_worker", 16384, nullptr, 1, &g_cameraTask, 0);
+        Serial.printf("[CAM] worker: %s\n", taskOk == pdPASS ? "OK" : "FAIL");
     } else {
-        Serial.println("  Camera warm-up: not ready");
+        g_cameraBootFailed = true;
+        g_camLastError = "cache_mutex";
+        Serial.println("[CAM] cache mutex allocation failed");
     }
+#endif
     g_cameraBootPending = false;
 #endif
 
@@ -823,20 +927,6 @@ void loop()
             GPS_RX_PIN,
             GPS_TX_PIN);
     }
-
-#if !SUBMIT_SKIP_CAMERA_HW
-    if (g_cameraBootPending && now >= g_cameraBootStartMs) {
-        g_cameraBootPending = false;
-        Serial.println("--- Camera (deferred) ---");
-        g_cameraBootFailed = !startCamera(1);
-        if (!g_cameraBootFailed && captureCameraFrame()) {
-            Serial.printf("  Camera warm-up: OK (%u bytes)\n", static_cast<unsigned>(g_camLen));
-        } else {
-            Serial.println("  Camera warm-up: not ready");
-        }
-        restoreTofBus();
-    }
-#endif
 
 #if !WIFI_DIAG_SKIP_PERIPHERALS
 #if !(SUBMIT_TELEMETRY_MODE && SUBMIT_SKIP_GPS_UART)
@@ -904,48 +994,6 @@ void loop()
 
     webServer.loop();
 
-#if !SUBMIT_SKIP_CAMERA_HW
-    static uint32_t tRetry = 0;
-    if (g_camRestartPending && millis() >= g_nextCameraStartMs) {
-        g_camRestartPending = false;
-        tRetry = millis();
-        startCamera(2, true);
-        restoreTofBus();
-    } else if (!g_cameraBootFailed && !g_camReady && !g_camRestartPending && millis() - tRetry >= CAMERA_RETRY_MS) {
-        tRetry = millis();
-        stopCameraDriver();
-        startCamera(1, true);
-        restoreTofBus();
-    }
-
-    static uint32_t tBootRetry = 0;
-    if (g_cameraBootFailed && !g_camReady && !g_camRestartPending &&
-        WiFi.softAPgetStationNum() > 0 &&
-        (tBootRetry == 0 || millis() - tBootRetry >= CAMERA_BOOT_RETRY_MS)) {
-        tBootRetry = millis();
-        Serial.println("[CAM] low-rate boot retry because a client is connected");
-        runCameraRetry("connected-client");
-    }
-
-    if (g_manualCameraRetry) {
-        g_manualCameraRetry = false;
-        runCameraRetry("web");
-    }
-
-#if CAMERA_BACKGROUND_CAPTURE
-    if (millis() - g_lastCaptureAttemptMs >= CAMERA_CAPTURE_PERIOD_MS) {
-        captureCameraFrame();
-    }
-#endif
-
-#if CAMERA_BACKGROUND_CAPTURE && CAMERA_STALE_AUTO_RESTART
-    const uint32_t staleNow = millis();
-    if (g_camReady && g_camValid && g_lastFrameMs &&
-        (staleNow - g_lastFrameMs > CAMERA_STALE_RESTART_MS)) {
-        requestCameraRestart("stale");
-    }
-#endif
-#endif
 #endif
 
     static uint32_t tLog = 0;
