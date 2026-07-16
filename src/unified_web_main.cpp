@@ -20,21 +20,19 @@
 #include "control/manual_control.h"
 #include "comm/fc_rc_mapping.h"
 #include "comm/fc_bridge.h"
+#include "comm/fc_telemetry_policy.h"
 
-#define WIFI_AP_SSID        "NMC-Umbrella"
-#define WIFI_AP_PASSWORD    "12345678"
-#define UNIFIED_FW_TAG      "unified-web-20260715-camera"
-#define WIFI_DIAG_SKIP_PERIPHERALS 0
-#define SUBMIT_TELEMETRY_MODE 1
-#define SUBMIT_SKIP_TOF_HW 1
-#define SUBMIT_SKIP_GPS_UART 1
-#define SUBMIT_SKIP_CAMERA_HW 0
-
-#if ENABLE_REAL_FC_OUTPUT
-#define SUBMIT_SKIP_FC_UART 0
+#if UNIFIED_DEMO_MODE
+#define WIFI_AP_SSID        "NMC-Umbrella-Demo"
+#define UNIFIED_FW_TAG      "unified-web-20260716-demo"
 #else
-#define SUBMIT_SKIP_FC_UART 1
+#define WIFI_AP_SSID        "NMC-Umbrella"
+#define UNIFIED_FW_TAG      "unified-web-20260716-real-fc"
 #endif
+#define WIFI_AP_PASSWORD    "12345678"
+#define WIFI_DIAG_SKIP_PERIPHERALS 0
+#define SUBMIT_SKIP_TOF_HW 0
+#define SUBMIT_SKIP_CAMERA_HW 0
 
 #define CAMPUS_GPS_BASE_LAT   34.126600
 #define CAMPUS_GPS_BASE_LNG   108.837200
@@ -483,6 +481,15 @@ static void cameraWorker(void*)
 
 static bool scanForTof()
 {
+#if defined(TOF_XSHUT_PIN) && (TOF_XSHUT_PIN >= 0)
+    // Reboot the sensor before every initialization attempt. A stuck VL53L1X
+    // can keep SDA/SCL idle-high while no longer acknowledging its address.
+    pinMode(TOF_XSHUT_PIN, OUTPUT);
+    digitalWrite(TOF_XSHUT_PIN, LOW);
+    delay(20);
+    digitalWrite(TOF_XSHUT_PIN, HIGH);
+    delay(120);
+#endif
     TOF_I2C_PORT.begin(TOF_SDA, TOF_SCL);
     TOF_I2C_PORT.setTimeOut(40);
     TOF_I2C_PORT.setClock(TOF_I2C_FREQ);
@@ -495,6 +502,82 @@ static bool scanForTof()
     if (err == 0) {
         Serial.println("  I2C device: 0x29 (VL53L1X)");
         return true;
+    }
+
+    // A Wire timeout alone cannot distinguish a dead sensor from a controller
+    // conflict. Probe the same two physical lines in software before retrying.
+    TOF_I2C_PORT.end();
+    delayMicroseconds(20);
+
+    auto releaseLine = [](int pin) {
+        pinMode(pin, INPUT_PULLUP);
+        delayMicroseconds(12);
+    };
+    auto driveLow = [](int pin) {
+        pinMode(pin, OUTPUT_OPEN_DRAIN);
+        digitalWrite(pin, LOW);
+        delayMicroseconds(12);
+    };
+    auto raiseClock = [&]() {
+        releaseLine(TOF_SCL);
+        for (uint8_t i = 0; i < 100; i++) {
+            if (digitalRead(TOF_SCL) == HIGH) return true;
+            delayMicroseconds(10);
+        }
+        return false;
+    };
+
+    releaseLine(TOF_SDA);
+    releaseLine(TOF_SCL);
+    const bool sdaHigh = digitalRead(TOF_SDA) == HIGH;
+    const bool sclHigh = digitalRead(TOF_SCL) == HIGH;
+#if defined(TOF_XSHUT_PIN) && (TOF_XSHUT_PIN >= 0)
+    const int xshutHigh = digitalRead(TOF_XSHUT_PIN) == HIGH;
+#else
+    const int xshutHigh = -1;
+#endif
+
+    bool softAck = false;
+    if (sdaHigh && sclHigh) {
+        driveLow(TOF_SDA); // I2C start
+        driveLow(TOF_SCL);
+        uint8_t address = 0x29 << 1;
+        bool clockOk = true;
+        for (uint8_t bit = 0; bit < 8; bit++) {
+            if (address & 0x80) releaseLine(TOF_SDA);
+            else driveLow(TOF_SDA);
+            clockOk = raiseClock();
+            delayMicroseconds(12);
+            driveLow(TOF_SCL);
+            address <<= 1;
+            if (!clockOk) break;
+        }
+        if (clockOk) {
+            releaseLine(TOF_SDA); // Ninth clock: slave ACK is low.
+            clockOk = raiseClock();
+            delayMicroseconds(12);
+            softAck = clockOk && digitalRead(TOF_SDA) == LOW;
+            driveLow(TOF_SCL);
+        }
+        driveLow(TOF_SDA); // I2C stop
+        (void)raiseClock();
+        releaseLine(TOF_SDA);
+    }
+
+    Serial.printf("  ToF line diag: SDA=%d SCL=%d XSHUT=%d soft_ack=%d\n",
+        sdaHigh, sclHigh, xshutHigh, softAck);
+
+    TOF_I2C_PORT.begin(TOF_SDA, TOF_SCL);
+    TOF_I2C_PORT.setTimeOut(40);
+    TOF_I2C_PORT.setClock(TOF_I2C_FREQ);
+
+    if (softAck) {
+        TOF_I2C_PORT.beginTransmission(0x29);
+        err = TOF_I2C_PORT.endTransmission();
+        if (err == 0) {
+            Serial.println("  I2C device: 0x29 (VL53L1X, recovered after line probe)");
+            return true;
+        }
     }
 
     Serial.printf("  ToF probe failed: i2c_err=%u\n", err);
@@ -537,7 +620,7 @@ static void initTof()
         static_cast<unsigned long>(td.errorCount));
 }
 
-#if SUBMIT_TELEMETRY_MODE
+#if GPS_PRESENTATION_MODE
 static void applySubmitGps(TelemetryData& data, const GPSData& gd, uint32_t now)
 {
     const float t = now * 0.001f;
@@ -558,14 +641,22 @@ static void applySubmitGps(TelemetryData& data, const GPSData& gd, uint32_t now)
     data.gpsFailedChecksum = gd.failedChecksum;
     data.errorFlags &= ~static_cast<uint32_t>(2);
 }
+#endif
 
+#if FC_PRESENTATION_MODE
 static void applySubmitFc(TelemetryData& data, const SimFcState& fc, uint32_t now)
 {
     const float t = now * 0.001f;
-    const uint32_t linkTick = now / 100;
 
     data.fcOnline = true;
-    data.fcRealOnline = true;
+    data.fcRealOnline = false;
+    data.fcSource = "presentation";
+    data.fcDataAgeMs = 0;
+    data.fcStatusValid = true;
+    data.fcAttitudeValid = true;
+    data.fcRcValid = true;
+    data.fcBatteryValid = true;
+    data.fcAltitudeValid = true;
     data.armed = fc.armed;
     data.flightMode = fc.flightMode;
     data.fcScenario = static_cast<int>(fc.scenario);
@@ -574,8 +665,8 @@ static void applySubmitFc(TelemetryData& data, const SimFcState& fc, uint32_t no
     const int16_t cycleJitter = static_cast<int16_t>(18.0f * sinf(t * 1.7f));
     const int16_t cycleTime = static_cast<int16_t>(fc.cycleTimeUs) + cycleJitter;
     data.fcCycleTimeUs = static_cast<uint16_t>(cycleTime > 800 ? cycleTime : 800);
-    data.fcCpuLoad = static_cast<uint8_t>(fc.cpuLoad + 2.0f + 2.0f * sinf(t * 0.8f));
-    data.fcLinkQuality = fc.linkQuality;
+    data.fcCpuLoad = 0;
+    data.fcLinkQuality = 0;
     data.fcVario = fc.varioCms;
     data.roll = fc.roll;
     data.pitch = fc.pitch;
@@ -610,11 +701,11 @@ static void applySubmitFc(TelemetryData& data, const SimFcState& fc, uint32_t no
     data.fcOutAux1 = 1800;
     data.fcOutAux2 = 1800;
     data.fcOutReason = "ready";
-    data.fcMspTxFrames = 30 + linkTick;
-    data.fcMspTxBytes = data.fcMspTxFrames * 6;
-    data.fcMspRxBytes = data.fcMspTxFrames * 18;
+    data.fcMspTxFrames = 0;
+    data.fcMspTxBytes = 0;
+    data.fcMspRxBytes = 0;
     data.fcMspTimeouts = 0;
-    data.fcMspLastError = "none";
+    data.fcMspLastError = "presentation";
     data.errorFlags &= ~static_cast<uint32_t>(4);
 }
 #endif
@@ -665,14 +756,21 @@ static void fillTelemetry(TelemetryData& data)
     data.gpsSentences = gd.sentencesWithFix;
     data.gpsFailedChecksum = gd.failedChecksum;
     if (!gd.online) data.errorFlags |= 2;
-#if SUBMIT_TELEMETRY_MODE
+#if GPS_PRESENTATION_MODE
     applySubmitGps(data, gd, now);
 #endif
 
     const auto& fc = simFc.getState();
     data.fcOnline = false;
+    data.fcSource = "offline";
+    data.fcDataAgeMs = 0;
+    data.fcStatusValid = false;
+    data.fcAttitudeValid = false;
+    data.fcRcValid = false;
+    data.fcBatteryValid = false;
+    data.fcAltitudeValid = false;
     data.armed = false;
-    data.flightMode = 0;
+    data.flightMode = -1;
     data.fcScenario = -1;
     data.fcScenarioName = "msp_wait";
     data.fcFailsafe = false;
@@ -697,7 +795,14 @@ static void fillTelemetry(TelemetryData& data)
     data.rxAux1Low = false;
     data.rxAux2Low = false;
     data.rxBenchReady = false;
+#if ENABLE_FC_READONLY_TELEMETRY
     data.fcRealOnline = fcBridge.isOnline();
+    data.fcDataAgeMs = fcBridge.getDataAgeMs();
+#else
+    data.fcRealOnline = false;
+#endif
+    data.fcSource = selectFCTelemetrySource(FC_PRESENTATION_MODE != 0,
+                                             data.fcRealOnline);
     {
         const FCOutputDiag& od = fcBridge.getOutputDiag();
         const MSPDiag& md = fcBridge.getMSPDiag();
@@ -734,35 +839,42 @@ static void fillTelemetry(TelemetryData& data)
     if (data.fcRealOnline) {
         const FCState& real = fcBridge.getState();
         data.fcOnline = true;
-        data.armed = real.armed;
-        data.flightMode = real.armed ? 1 : 0;
+        data.fcSource = "real_msp";
+        data.fcStatusValid = fcBridge.isStatusFresh();
+        data.fcAttitudeValid = fcBridge.isAttitudeFresh();
+        data.fcRcValid = fcBridge.isRCFresh();
+        data.fcBatteryValid = fcBridge.isBatteryFresh();
+        data.fcAltitudeValid = fcBridge.isAltitudeFresh();
+        data.armed = data.fcStatusValid ? real.armed : false;
+        data.flightMode = -1;
         data.fcScenario = -1;
         data.fcScenarioName = "real_fc";
         data.fcFailsafe = false;
-        data.fcCycleTimeUs = real.cycleTime;
+        data.fcCycleTimeUs = data.fcStatusValid ? real.cycleTime : 0;
         data.fcCpuLoad = 0;
-        data.fcLinkQuality = 100;
-        data.fcVario = real.vario;
-        data.roll = real.roll;
-        data.pitch = real.pitch;
-        data.yaw = real.yaw;
-        data.altitude = real.altitude;
-        data.batteryVoltage = real.batteryVoltage;
-        data.batteryCells = real.batteryCells;
-        data.rcChannelCount = real.rcChannelCount;
+        data.fcLinkQuality = 0;
+        data.fcVario = data.fcAltitudeValid ? real.vario : 0;
+        data.roll = data.fcAttitudeValid ? real.roll : 0;
+        data.pitch = data.fcAttitudeValid ? real.pitch : 0;
+        data.yaw = data.fcAttitudeValid ? real.yaw : 0;
+        data.altitude = data.fcAltitudeValid ? real.altitude : 0;
+        data.batteryVoltage = data.fcBatteryValid ? real.batteryVoltage : 0;
+        data.batteryCells = data.fcBatteryValid ? real.batteryCells : 0;
+        const uint8_t realRcCount = data.fcRcValid ? real.rcChannelCount : 0;
+        data.rcChannelCount = realRcCount;
         // Betaflight MSP_RC reports internal AERT order after channel mapping:
         // roll, pitch, yaw, throttle, then AUX channels.
-        data.rcRoll = real.rcChannelCount > 0 ? real.rcChannels[0] : FC_RC_MID;
-        data.rcPitch = real.rcChannelCount > 1 ? real.rcChannels[1] : FC_RC_MID;
-        data.rcYaw = real.rcChannelCount > 2 ? real.rcChannels[2] : FC_RC_MID;
-        data.rcThrottle = real.rcChannelCount > 3 ? real.rcChannels[3] : 1000;
-        data.rcAux1 = real.rcChannelCount > 4 ? real.rcChannels[4] : FC_RC_MID;
-        data.rcAux2 = real.rcChannelCount > 5 ? real.rcChannels[5] : 1000;
-        data.fcAssistSwitch = data.rcAux2 >= REAL_FC_ASSIST_AUX_MIN;
+        data.rcRoll = realRcCount > 0 ? real.rcChannels[0] : FC_RC_MID;
+        data.rcPitch = realRcCount > 1 ? real.rcChannels[1] : FC_RC_MID;
+        data.rcYaw = realRcCount > 2 ? real.rcChannels[2] : FC_RC_MID;
+        data.rcThrottle = realRcCount > 3 ? real.rcChannels[3] : 1000;
+        data.rcAux1 = realRcCount > 4 ? real.rcChannels[4] : FC_RC_MID;
+        data.rcAux2 = realRcCount > 5 ? real.rcChannels[5] : 1000;
+        data.fcAssistSwitch = data.fcRcValid && data.rcAux2 >= REAL_FC_ASSIST_AUX_MIN;
         data.fcAssistGateOpen = fcBridge.isAssistGateOpen();
         const MC6CReceiverReadiness rx = evaluateMC6CReceiverReadiness(
             real.rcChannels,
-            real.rcChannelCount,
+            realRcCount,
             MC6C_RC_CENTER_MIN,
             MC6C_RC_CENTER_MAX,
             MC6C_RC_LOW_MAX,
@@ -776,7 +888,7 @@ static void fillTelemetry(TelemetryData& data)
         data.rxAux2Low = rx.aux2Low;
         data.rxBenchReady = rx.benchReady;
     } else {
-#if SUBMIT_TELEMETRY_MODE
+#if FC_PRESENTATION_MODE
         applySubmitFc(data, fc, now);
 #else
         data.errorFlags |= 4;
@@ -784,11 +896,13 @@ static void fillTelemetry(TelemetryData& data)
     }
 
     // Manual 方向控制场景: 用内部运动学位置覆盖显示 (m → mm)
+#if FC_PRESENTATION_MODE
     if (fc.scenario == SimFcScenario::Manual) {
         data.posX = fc.posX * 1000.0f;
         data.posY = fc.posY * 1000.0f;
         data.posZ = fc.altitudeCm * 10.0f;
     }
+#endif
 
     const uint32_t camNow = millis();
 
@@ -831,17 +945,19 @@ void setup()
     Serial.println("==============================================");
 
     simFc.begin();
-#if SUBMIT_TELEMETRY_MODE
+#if FC_PRESENTATION_MODE
     simFc.setScenarioByName("follow");
 #endif
     g_manual.begin();
 #if WIFI_DIAG_SKIP_PERIPHERALS
     Serial.println("[DIAG] External peripherals skipped for WiFi/AP isolation");
 #else
-#if SUBMIT_TELEMETRY_MODE && SUBMIT_SKIP_FC_UART
-    Serial.println("[INFO] FC dashboard telemetry path active");
-#else
+#if FC_PRESENTATION_MODE
+    Serial.println("[INFO] Explicit FC presentation mode active");
+#elif ENABLE_FC_READONLY_TELEMETRY
     fcBridge.begin();
+#else
+    Serial.println("[INFO] FC telemetry disabled at compile time");
 #endif
 #endif
 
@@ -874,7 +990,7 @@ void setup()
     g_tofBootPending = true;
     g_tofBootStartMs = g_startTime + 800;
 #endif
-#if SUBMIT_TELEMETRY_MODE && SUBMIT_SKIP_GPS_UART
+#if GPS_PRESENTATION_MODE
     Serial.println("[INFO] GPS dashboard position path active");
     g_gpsBootPending = false;
 #else
@@ -929,10 +1045,10 @@ void loop()
     }
 
 #if !WIFI_DIAG_SKIP_PERIPHERALS
-#if !(SUBMIT_TELEMETRY_MODE && SUBMIT_SKIP_GPS_UART)
+#if !GPS_PRESENTATION_MODE
     gps.update();
 #endif
-#if !(SUBMIT_TELEMETRY_MODE && SUBMIT_SKIP_FC_UART)
+#if ENABLE_FC_READONLY_TELEMETRY
     fcBridge.update();
 #endif
 #endif
@@ -981,9 +1097,11 @@ void loop()
 #else
     if (g_tofInit) {
         tof.update();
-        if (!tof.isHealthy()) {
+        // Optical range quality can be transiently invalid. Only leave the
+        // active state after the driver itself has exhausted its I2C recovery.
+        if (!tof.isInitialized()) {
             g_tofInit = false;
-            Serial.println("[TOF] no valid range; polling paused until next slow retry");
+            Serial.println("[TOF] driver recovery exhausted; polling paused until next retry");
         }
     } else if (now - g_lastTofRetry >= TOF_RETRY_MS) {
         g_lastTofRetry = now;
@@ -1002,7 +1120,7 @@ void loop()
         tLog = logNow;
         TelemetryData sample = {};
         fillTelemetry(sample);
-        Serial.printf("[SYS] %lus heap=%u stations=%u cam:ready=%d valid=%d frames=%lu err=%lu age=%lu rec=%lu tof:online=%d dist=%.0f gps:online=%d valid=%d sats=%d lat=%.6f lng=%.6f fc:online=%d mspTimeouts=%lu\n",
+        Serial.printf("[SYS] %lus heap=%u stations=%u cam:ready=%d valid=%d frames=%lu err=%lu age=%lu rec=%lu tof:online=%d dist=%.0f gps:online=%d valid=%d sats=%d lat=%.6f lng=%.6f fc:source=%s online=%d real=%d valid=%d/%d/%d/%d/%d msp:tx=%lu rx=%lu timeout=%lu raw=%lu err=%s\n",
             static_cast<unsigned long>((logNow - g_startTime) / 1000),
             ESP.getFreeHeap(),
             static_cast<unsigned>(WiFi.softAPgetStationNum()),
@@ -1019,8 +1137,19 @@ void loop()
             sample.gpsSats,
             sample.gpsLat,
             sample.gpsLng,
+            sample.fcSource ? sample.fcSource : "offline",
             static_cast<int>(sample.fcOnline),
-            static_cast<unsigned long>(sample.fcMspTimeouts));
+            static_cast<int>(sample.fcRealOnline),
+            static_cast<int>(sample.fcStatusValid),
+            static_cast<int>(sample.fcAttitudeValid),
+            static_cast<int>(sample.fcRcValid),
+            static_cast<int>(sample.fcBatteryValid),
+            static_cast<int>(sample.fcAltitudeValid),
+            static_cast<unsigned long>(sample.fcMspTxFrames),
+            static_cast<unsigned long>(sample.fcMspRxBytes),
+            static_cast<unsigned long>(sample.fcMspTimeouts),
+            static_cast<unsigned long>(sample.fcOutRawAttempts),
+            sample.fcMspLastError ? sample.fcMspLastError : "n/a");
     }
 
     delay(5);

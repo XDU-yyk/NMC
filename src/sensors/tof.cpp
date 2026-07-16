@@ -367,9 +367,14 @@ void ToFSensor::update() {
             now - m_lastRecoverAttempt >= TOF_RECOVER_PERIOD_MS) {
             m_lastRecoverAttempt = now;
             m_data.recoveries++;
-            LOG(LOG_TAG_TOF, "Recovering VL53L1X after %lu errors",
+            LOG(LOG_TAG_TOF, "Disabling VL53L1X after %lu errors; main loop will retry init",
                 static_cast<unsigned long>(m_data.errorCount));
-            begin();
+            m_initialized = false;
+            m_data.valid = false;
+            m_data.rangeStatus = 255;
+            m_data.timeout = true;
+            m_data.lastFault = "recover_deferred";
+            recoverBus();
         }
         return;
     }

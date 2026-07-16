@@ -249,10 +249,11 @@ bool MSP::readIMU(int16_t acc[3], int16_t gyro[3])
     return true;
 }
 
-bool MSP::readStatus(uint16_t& cycleTime, uint8_t& armingFlags)
+bool MSP::readStatus(uint16_t& cycleTime, uint8_t& armingFlags,
+                     uint32_t timeoutMs)
 {
     MSPFrame f;
-    if (!request(MSP_STATUS, f)) return false;
+    if (!request(MSP_STATUS, f, timeoutMs)) return false;
     if (f.size < 10) return false;
 
     cycleTime = (uint16_t)(f.payload[0] | (f.payload[1] << 8));

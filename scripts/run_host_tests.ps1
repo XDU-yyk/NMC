@@ -33,6 +33,13 @@ $tests = @(
             "src\control\manual_control.cpp"
         )
         Output = "fc_ready_web_output_path_test.exe"
+    },
+    @{
+        Name = "fc_telemetry_policy"
+        Sources = @(
+            "test\test_fc_telemetry_policy.cpp"
+        )
+        Output = "fc_telemetry_policy_test.exe"
     }
 )
 

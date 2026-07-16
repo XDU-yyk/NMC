@@ -70,7 +70,8 @@ public:
     bool readIMU(int16_t acc[3], int16_t gyro[3]);
     // armingFlags bit 0 is the Betaflight MSP_STATUS ARM active-box state.
     // It is not the Betaflight arming-disable-flags field from MSP_STATUS_EX.
-    bool readStatus(uint16_t& cycleTime, uint8_t& armingFlags);
+    bool readStatus(uint16_t& cycleTime, uint8_t& armingFlags,
+                    uint32_t timeoutMs = 100);
 
     bool setRawRC(const uint16_t channels[16]);
     bool sendArmCommand(bool arm);

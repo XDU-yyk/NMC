@@ -35,6 +35,16 @@ struct FCState {
 
     bool     valid;                   // 数据有效标志
     uint32_t lastUpdate;              // 最后更新时间 (ms)
+    bool     statusValid;
+    bool     attitudeValid;
+    bool     rcValid;
+    bool     altitudeValid;
+    bool     batteryValid;
+    uint32_t lastStatusUpdate;
+    uint32_t lastAttitudeUpdate;
+    uint32_t lastRCUpdate;
+    uint32_t lastAltitudeUpdate;
+    uint32_t lastBatteryUpdate;
 };
 
 /* ── 控制输出 (ESP32 → 飞控) ── */
@@ -85,6 +95,12 @@ public:
 
     /* 飞控是否在线 (最近 N ms 内收到数据) */
     bool isOnline() const;
+    bool isStatusFresh() const;
+    bool isAttitudeFresh() const;
+    bool isRCFresh() const;
+    bool isAltitudeFresh() const;
+    bool isBatteryFresh() const;
+    uint32_t getDataAgeMs() const;
 
     /* FC-ready assist gate: online + Betaflight ARM active-box + MC6C CH6/AUX2 high */
     bool isAssistGateOpen() const;
@@ -115,7 +131,7 @@ private:
     void pollAltitude();
     void pollBattery();
     void pollRC();
-    void pollStatus();
+    void pollStatus(uint32_t timeoutMs = FC_MSP_TIMEOUT_MS);
     void sendRawRC(const FCOutput& out);
 };
 

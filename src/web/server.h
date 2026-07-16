@@ -41,7 +41,7 @@ struct TelemetryData {
     float tofDistance = 0;       // mm
     float altitude = 0;          // cm
     float batteryVoltage = 0;    // V
-    uint8_t batteryCells = 3;
+    uint8_t batteryCells = 0;
     // GPS
     bool   gpsValid = false;
     int    gpsSats = 0;
@@ -53,9 +53,16 @@ struct TelemetryData {
     uint32_t gpsFailedChecksum = 0;
     // 飞控
     bool   fcOnline = false;
+    const char* fcSource = "offline";
+    uint32_t fcDataAgeMs = 0;
+    bool   fcStatusValid = false;
+    bool   fcAttitudeValid = false;
+    bool   fcRcValid = false;
+    bool   fcBatteryValid = false;
+    bool   fcAltitudeValid = false;
     bool   armed = false;
-    int    flightMode = 0;       // 0=IDLE,1=HOVER,2=FOLLOW,3=RTH,4=LOST
-    int    fcScenario = 0;
+    int    flightMode = -1;
+    int    fcScenario = -1;
     const char* fcScenarioName = "offline";
     bool   fcFailsafe = false;
     uint16_t fcCycleTimeUs = 0;

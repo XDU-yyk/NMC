@@ -199,8 +199,20 @@ function Assert-UnifiedWebEnvSeparation {
     param([string]$PlatformioText)
 
     $defaultWeb = Get-PlatformioEnvSection $PlatformioText "esp32-s3-unified-web"
-    Assert-NotContains $defaultWeb "comm[\\/]fc_bridge\.cpp|comm[\\/]msp\.cpp" `
-        "esp32-s3-unified-web must not compile FC bridge/MSP sources"
+    Assert-Contains $defaultWeb "comm[\\/]fc_bridge\.cpp" `
+        "esp32-s3-unified-web must compile the read-only FC bridge"
+    Assert-Contains $defaultWeb "comm[\\/]msp\.cpp" `
+        "esp32-s3-unified-web must compile the read-only MSP transport"
+
+    $demo = Get-PlatformioEnvSection $PlatformioText "esp32-s3-unified-web-demo"
+    Assert-Contains $demo "extends\s*=\s*env:esp32-s3-unified-web" `
+        "esp32-s3-unified-web-demo must extend the default unified Web environment"
+    Assert-Contains $demo "-DFC_PRESENTATION_MODE=1" `
+        "esp32-s3-unified-web-demo must explicitly enable FC presentation mode"
+    Assert-Contains $demo "-DENABLE_FC_READONLY_TELEMETRY=0" `
+        "esp32-s3-unified-web-demo must explicitly disable real FC polling"
+    Assert-Contains $demo "-DUNIFIED_DEMO_MODE=1" `
+        "esp32-s3-unified-web-demo must use the demo identity and AP name"
 
     $fcReady = Get-PlatformioEnvSection $PlatformioText "esp32-s3-unified-web-fc-ready"
     Assert-Contains $fcReady "comm[\\/]fc_bridge\.cpp" `
@@ -273,12 +285,14 @@ Assert-Contains $unifiedWebMain "Never arms/disarms or drives motors directly" `
     "unified web serial banner must preserve no arm/disarm/direct-motor boundary"
 
 $indexHtml = Read-RepoText "src\web\index_html.h"
-Assert-Contains $indexHtml "safetyBanner" `
-    "web page must expose a dynamic safety banner"
 Assert-Contains $indexHtml "fcRealOutputCompiled" `
-    "web page safety banner must distinguish FC-ready from the default safe build"
-Assert-Contains $indexHtml "MSP_SET_RAW_RC" `
-    "web page safety banner must name the gated FC-ready MSP_SET_RAW_RC behavior"
+    "web page must distinguish output-capable builds from read-only telemetry"
+Assert-ContainsUtf8Hex $indexHtml "E9A39EE68EA7E69CAAE8BF9EE68EA5" `
+    "web page must explicitly show flight controller offline"
+Assert-Contains $indexHtml "UART3 MSP" `
+    "web page must identify the UART3 MSP wait state"
+Assert-ContainsUtf8Hex $indexHtml "E58FAAE8AFBBE981A5E6B58B" `
+    "web page must label the default link as read-only telemetry"
 
 $srcFiles = Get-ChildItem -LiteralPath (Join-Path $RepoRoot "src") -Recurse -Include *.cpp,*.h | Where-Object { -not $_.PSIsContainer }
 $externalMspWrites = @()

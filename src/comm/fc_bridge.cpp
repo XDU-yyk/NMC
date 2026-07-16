@@ -5,11 +5,16 @@
 
 #include "comm/fc_bridge.h"
 #include "comm/fc_rc_mapping.h"
+#include "comm/fc_telemetry_policy.h"
 
 FCBridge fcBridge;
 
 namespace {
-constexpr uint32_t FC_OFFLINE_STATUS_POLL_MS = 500;
+constexpr uint32_t FC_ONLINE_STATUS_POLL_MS = 200;
+constexpr uint32_t FC_ATTITUDE_POLL_MS = 50;
+constexpr uint32_t FC_RC_POLL_MS = 100;
+constexpr uint32_t FC_ALTITUDE_POLL_MS = 200;
+constexpr uint32_t FC_BATTERY_POLL_MS = 1000;
 }
 
 void FCBridge::begin() {
@@ -34,15 +39,18 @@ void FCBridge::begin() {
     // 初始化解锁状态
     uint16_t ct;
     uint8_t af;
-    if (m_msp.readStatus(ct, af)) {
+    if (m_msp.readStatus(ct, af, FC_MSP_DISCOVERY_TIMEOUT_MS)) {
         m_state.armed     = (af & 0x01);
         m_state.cycleTime = ct;
         m_state.valid     = true;
-        m_state.lastUpdate = millis();
+        m_state.statusValid = true;
+        m_state.lastStatusUpdate = millis();
+        m_state.lastUpdate = m_state.lastStatusUpdate;
         LOG(LOG_TAG_FC, "FC online — armed=%d, cycle=%dus", m_state.armed, ct);
     } else {
         LOG(LOG_TAG_FC, "WARNING: FC not responding, check UART wiring");
     }
+    m_lastReadStatus = millis();
 }
 
 void FCBridge::update() {
@@ -54,24 +62,24 @@ void FCBridge::update() {
     // one data block per update() call.
     if (!isOnline()) {
         if (now - m_lastReadStatus >= FC_OFFLINE_STATUS_POLL_MS) {
-            pollStatus();
+            pollStatus(FC_MSP_DISCOVERY_TIMEOUT_MS);
             m_lastReadStatus = now;
         }
-    } else if (now - m_lastReadStatus >= 200) {
+    } else if (now - m_lastReadStatus >= FC_ONLINE_STATUS_POLL_MS) {
         pollStatus();
         m_lastReadStatus = now;
-    } else if (now - m_lastReadRC >= 30) {
-        pollRC();
-        m_lastReadRC = now;
-    } else if (now - m_lastReadBattery >= 500) {
-        pollBattery();
-        m_lastReadBattery = now;
-    } else if (now - m_lastReadAltitude >= 20) {
-        pollAltitude();
-        m_lastReadAltitude = now;
-    } else if (now - m_lastReadAttitude >= 10) {
+    } else if (now - m_lastReadAttitude >= FC_ATTITUDE_POLL_MS) {
         pollAttitude();
         m_lastReadAttitude = now;
+    } else if (now - m_lastReadRC >= FC_RC_POLL_MS) {
+        pollRC();
+        m_lastReadRC = now;
+    } else if (now - m_lastReadAltitude >= FC_ALTITUDE_POLL_MS) {
+        pollAltitude();
+        m_lastReadAltitude = now;
+    } else if (now - m_lastReadBattery >= FC_BATTERY_POLL_MS) {
+        pollBattery();
+        m_lastReadBattery = now;
     }
 
     // 发送控制指令 (按需, 最大 50Hz)
@@ -119,7 +127,36 @@ void FCBridge::setOutput(const FCOutput& out) {
 }
 
 bool FCBridge::isOnline() const {
-    return m_state.valid && (millis() - m_state.lastUpdate) < FC_MSP_TIMEOUT_MS * 5;
+    return isStatusFresh();
+}
+
+bool FCBridge::isStatusFresh() const {
+    return m_state.statusValid &&
+        isFCTelemetryFresh(millis(), m_state.lastStatusUpdate, FC_STATUS_FRESH_MS);
+}
+
+bool FCBridge::isAttitudeFresh() const {
+    return m_state.attitudeValid &&
+        isFCTelemetryFresh(millis(), m_state.lastAttitudeUpdate, FC_ATTITUDE_FRESH_MS);
+}
+
+bool FCBridge::isRCFresh() const {
+    return m_state.rcValid &&
+        isFCTelemetryFresh(millis(), m_state.lastRCUpdate, FC_RC_FRESH_MS);
+}
+
+bool FCBridge::isAltitudeFresh() const {
+    return m_state.altitudeValid &&
+        isFCTelemetryFresh(millis(), m_state.lastAltitudeUpdate, FC_ALTITUDE_FRESH_MS);
+}
+
+bool FCBridge::isBatteryFresh() const {
+    return m_state.batteryValid &&
+        isFCTelemetryFresh(millis(), m_state.lastBatteryUpdate, FC_BATTERY_FRESH_MS);
+}
+
+uint32_t FCBridge::getDataAgeMs() const {
+    return m_state.lastUpdate ? millis() - m_state.lastUpdate : 0;
 }
 
 bool FCBridge::arm() {
@@ -149,46 +186,57 @@ bool FCBridge::disarm() {
 void FCBridge::pollAttitude() {
     float r, p, y;
     if (m_msp.readAttitude(r, p, y)) {
+        const uint32_t now = millis();
         m_state.roll   = r;
         m_state.pitch  = p;
         m_state.yaw    = y;
-        m_state.valid = true;
-        m_state.lastUpdate = millis();
+        m_state.attitudeValid = true;
+        m_state.lastAttitudeUpdate = now;
+        m_state.lastUpdate = now;
     }
 }
 
 void FCBridge::pollAltitude() {
     float alt, vario;
     if (m_msp.readAltitude(alt, vario)) {
+        const uint32_t now = millis();
         m_state.altitude = alt;
         m_state.vario    = vario;
-        m_state.valid = true;
-        m_state.lastUpdate = millis();
+        m_state.altitudeValid = true;
+        m_state.lastAltitudeUpdate = now;
+        m_state.lastUpdate = now;
     }
 }
 
 void FCBridge::pollBattery() {
     if (m_msp.readBattery(m_state.batteryCells, m_state.batteryVoltage)) {
-        m_state.valid = true;
-        m_state.lastUpdate = millis();
+        const uint32_t now = millis();
+        m_state.batteryValid = true;
+        m_state.lastBatteryUpdate = now;
+        m_state.lastUpdate = now;
     }
 }
 
 void FCBridge::pollRC() {
     if (m_msp.readRC(m_state.rcChannels, m_state.rcChannelCount)) {
-        m_state.valid = true;
-        m_state.lastUpdate = millis();
+        const uint32_t now = millis();
+        m_state.rcValid = true;
+        m_state.lastRCUpdate = now;
+        m_state.lastUpdate = now;
     }
 }
 
-void FCBridge::pollStatus() {
+void FCBridge::pollStatus(uint32_t timeoutMs) {
     uint16_t ct;
     uint8_t  af;
-    if (m_msp.readStatus(ct, af)) {
+    if (m_msp.readStatus(ct, af, timeoutMs)) {
+        const uint32_t now = millis();
         m_state.cycleTime = ct;
         m_state.armed     = (af & 0x01);
         m_state.valid = true;
-        m_state.lastUpdate = millis();
+        m_state.statusValid = true;
+        m_state.lastStatusUpdate = now;
+        m_state.lastUpdate = now;
     }
 }
 

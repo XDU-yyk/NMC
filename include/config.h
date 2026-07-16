@@ -61,6 +61,27 @@
 #define FC_BAUD             115200
 #define FC_MSP_TIMEOUT_MS   100
 
+#ifndef ENABLE_FC_READONLY_TELEMETRY
+#define ENABLE_FC_READONLY_TELEMETRY 1
+#endif
+#ifndef FC_PRESENTATION_MODE
+#define FC_PRESENTATION_MODE 0
+#endif
+#ifndef GPS_PRESENTATION_MODE
+#define GPS_PRESENTATION_MODE 1
+#endif
+#ifndef UNIFIED_DEMO_MODE
+#define UNIFIED_DEMO_MODE 0
+#endif
+
+#define FC_MSP_DISCOVERY_TIMEOUT_MS 40
+#define FC_OFFLINE_STATUS_POLL_MS   1000
+#define FC_STATUS_FRESH_MS          750
+#define FC_ATTITUDE_FRESH_MS        500
+#define FC_RC_FRESH_MS              750
+#define FC_ALTITUDE_FRESH_MS        1000
+#define FC_BATTERY_FRESH_MS         2000
+
 /* ── GPS NEO-M8N (UART1) ── */
 #define GPS_UART_NUM        1
 #define GPS_RX_PIN          18
@@ -92,8 +113,16 @@
 // ESP32-S3 标准相机引脚配置
 // 注意: Y8/D6(GPIO41) 和 Y5/D5(GPIO42) 仍用原引脚，不再与 ToF I2C 冲突
 // ToF 已改为 GPIO4(SDA)/GPIO5(SCL)，两者可在不同固件中独立运行
-#define CAM_PIN_PWDN        -1      // 未使用
-#define CAM_PIN_RESET       -1      // 未使用 (或接 GPIO -1 表示软复位)
+//
+// ⚠ 硬件接线必读（按 submit_stable_workflow_2026-07-09.md）：
+//   PWDN → 接 GND（否则摄像头可能处于断电模式）
+//   RST  → 接 3.3V（否则摄像头可能处于复位状态）
+//   SIOD (SDA) → GPIO1（摄像头模块丝印标注 SDA）
+//   SIOC (SCL) → GPIO2（摄像头模块丝印标注 SCL）
+//   如果摄像头无响应，尝试 SIOD↔SIOC 交换（统一固件已自动尝试）
+//   3.3V 和 GND 必须稳定，杜邦线要压紧
+#define CAM_PIN_PWDN        -1      // 硬件接 GND（-1 表示不由软件驱动）
+#define CAM_PIN_RESET       -1      // 硬件接 3.3V（-1 表示不由软件驱动）
 #define CAM_PIN_XCLK        -1      // 模块自带晶振，不接
 #define CAM_PIN_SIOD        2       // SCCB SDA / SIOD (verified on current wiring)
 #define CAM_PIN_SIOC        1       // SCCB SCL / SIOC (verified on current wiring)

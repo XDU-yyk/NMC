@@ -545,6 +545,14 @@ void WebServerManager::buildTelemetryJson(JsonDocument& doc)
         fillSimData(data);        // 内部备用数据
     }
 
+#if defined(WEB_UNIFIED_DASHBOARD) && !FC_PRESENTATION_MODE
+    if (!m_telemetryCb) {
+        data = TelemetryData{};
+        data.fcSource = "offline";
+        data.errorFlags |= 4;
+    }
+#endif
+
     doc["fw"] = data.firmwareTag ? data.firmwareTag : "unified-web";
 
     // 姿态
@@ -577,6 +585,13 @@ void WebServerManager::buildTelemetryJson(JsonDocument& doc)
 
     // 飞控
     doc["fcOnline"]   = data.fcOnline;
+    doc["fcSource"] = data.fcSource ? data.fcSource : "offline";
+    doc["fcDataAgeMs"] = data.fcDataAgeMs;
+    doc["fcStatusValid"] = data.fcStatusValid;
+    doc["fcAttitudeValid"] = data.fcAttitudeValid;
+    doc["fcRcValid"] = data.fcRcValid;
+    doc["fcBatteryValid"] = data.fcBatteryValid;
+    doc["fcAltitudeValid"] = data.fcAltitudeValid;
     doc["armed"]      = data.armed;
     doc["flightMode"] = data.flightMode;
     doc["fcScenario"] = data.fcScenario;
